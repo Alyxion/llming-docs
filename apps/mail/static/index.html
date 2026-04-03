@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>office-connect</title>
+  <link href="vendor/material-icons.css" rel="stylesheet">
+  <link href="vendor/phosphor-icons.css" rel="stylesheet">
+  <link href="vendor/quasar.prod.css" rel="stylesheet">
+  <link href="app.css" rel="stylesheet">
+</head>
+<body>
+  <div id="q-app">
+
+    <!-- ─── Login ─────────────────────────────────────────── -->
+    <div v-if="!authenticated" class="login-screen">
+      <div class="login-card">
+        <i class="ph ph-microsoft-outlook-logo login-icon"></i>
+        <h2>office-connect</h2>
+        <p class="text-grey-6">Sign in with your Microsoft 365 account</p>
+        <q-btn color="primary" label="Sign in" icon-right="login" href="login" no-caps size="lg" class="q-mt-md"></q-btn>
+      </div>
+    </div>
+
+    <!-- ─── Main app ──────────────────────────────────────── -->
+    <q-layout v-if="authenticated" view="hHh LpR fFf" class="app-layout">
+
+      <!-- ─── Left icon rail ───────────────────────────────── -->
+      <div class="nav-rail">
+        <div class="rail-top">
+          <q-btn flat round :class="{'rail-active': view === 'mail'}" @click="view = 'mail'; composeMode = false" class="rail-btn">
+            <i class="ph ph-envelope" :class="{'ph-fill': view === 'mail'}"></i>
+            <q-tooltip anchor="center right" self="center left" :offset="[8,0]">Mail</q-tooltip>
+          </q-btn>
+          <q-btn flat round :class="{'rail-active': view === 'calendar'}" @click="view = 'calendar'" class="rail-btn">
+            <i class="ph ph-calendar-blank" :class="{'ph-fill': view === 'calendar'}"></i>
+            <q-tooltip anchor="center right" self="center left" :offset="[8,0]">Calendar</q-tooltip>
+          </q-btn>
+          <q-btn flat round :class="{'rail-active': view === 'chat'}" @click="switchView('chat')" class="rail-btn">
+            <i class="ph ph-chat-circle" :class="{'ph-fill': view === 'chat'}"></i>
+            <q-tooltip anchor="center right" self="center left" :offset="[8,0]">Chat</q-tooltip>
+          </q-btn>
+          <q-btn flat round :class="{'rail-active': view === 'teams'}" @click="switchView('teams')" class="rail-btn">
+            <i class="ph ph-users-three" :class="{'ph-fill': view === 'teams'}"></i>
+            <q-tooltip anchor="center right" self="center left" :offset="[8,0]">Channels</q-tooltip>
+          </q-btn>
+          <q-btn flat round :class="{'rail-active': view === 'files'}" @click="switchView('files')" class="rail-btn">
+            <i class="ph ph-cloud" :class="{'ph-fill': view === 'files'}"></i>
+            <q-tooltip anchor="center right" self="center left" :offset="[8,0]">Files</q-tooltip>
+          </q-btn>
+          <q-btn flat round :class="{'rail-active': view === 'people'}" @click="view = 'people'; loadPeople('')" class="rail-btn">
+            <i class="ph ph-users" :class="{'ph-fill': view === 'people'}"></i>
+            <q-tooltip anchor="center right" self="center left" :offset="[8,0]">People</q-tooltip>
+          </q-btn>
+        </div>
+        <div class="rail-bottom">
+          <q-btn flat round class="rail-btn" @click="openSettings">
+            <i class="ph ph-gear"></i>
+            <q-tooltip anchor="center right" self="center left" :offset="[8,0]">Settings</q-tooltip>
+          </q-btn>
+        </div>
+      </div>
+
+      <!-- ─── Content area ─────────────────────────────────── -->
+      <div class="main-area">
+
+        <!-- ══════════════════════════════════════════════════ -->
+        <!-- MAIL VIEW                                         -->
+        <!-- ══════════════════════════════════════════════════ -->
+        <div v-if="view === 'mail' && !composeMode" class="mail-layout">
+
+          <!-- Folder sidebar -->
+          <div class="folder-sidebar">
+            <q-btn color="primary" no-caps class="new-mail-btn q-mb-md" @click="startCompose()">
+              <i class="ph ph-pencil-simple q-mr-sm"></i> New Mail
+            </q-btn>
+            <q-list dense>
+              <q-item v-for="f in folders" :key="f.id" clickable v-ripple dense
+                      :active="selectedFolder === f.id" active-class="folder-active"
+                      @click="selectFolder(f.id)">
+                <q-item-section avatar class="folder-icon-col">
+                  <i :class="folderIcon(f.name)"></i>
+                </q-item-section>
+                <q-item-section>
+                  <q-item-label class="folder-label">{{ f.name }}</q-item-label>
+                </q-item-section>
+                <q-item-section side v-if="f.unread">
+                  <span class="folder-badge">{{ f.unread }}</span>
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </div>
+
+          <!-- Message list -->
+          <div class="message-list-panel">
+            <div class="ml-header">
+              <span class="ml-title">{{ currentFolderName }}</span>
+              <div class="ml-search">
+                <i class="ph ph-magnifying-glass"></i>
+                <input v-model="mailSearch" placeholder="Search mail" @input="filterMessages">
+              </div>
+            </div>
+            <div class="ml-body" @scroll="onMessageListScroll">
+              <div v-if="loadingMail" class="ml-loading">
+                <q-spinner color="primary" size="24px"></q-spinner>
+              </div>
+              <template v-for="group in groupedMessages" :key="group.label">
+                <div class="msg-group-header">{{ group.label }}</div>
+                <div v-for="m in group.messages" :key="m.id"
+                     class="msg-row" :class="{active: selectedMessage && selectedMessage.email_id === m.id, unread: !m.is_read}"
+                     @click="openMessage(m.id)"
+                     @contextmenu.prevent="showContextMenu($event, 'mail', m)">
+                  <img v-if="senderPhoto(m.from_email)" :src="senderPhoto(m.from_email)" class="msg-avatar-img">
+                  <div v-else class="msg-avatar" :style="{background: avatarColor(m.from_name || m.from_email)}">
+                    {{ initials(m.from_name || m.from_email) }}
+                  </div>
+                  <div class="msg-content">
+                    <div class="msg-top-row">
+                      <span class="msg-sender">{{ m.from_name || m.from_email }}</span>
+                      <span class="msg-date">{{ formatShortDate(m.received) }}</span>
+                    </div>
+                    <div class="msg-subject">{{ m.subject }}</div>
+                    <div class="msg-preview">{{ m.preview }}</div>
+                  </div>
+                  <div class="msg-indicators">
+                    <i v-if="m.has_attachments" class="ph ph-paperclip"></i>
+                    <i v-if="m.importance === 'high'" class="ph ph-warning text-red"></i>
+                  </div>
+                </div>
+              </template>
+              <div v-if="!loadingMail && filteredMessages.length === 0" class="ml-empty">
+                <i class="ph ph-tray" style="font-size:48px;color:#ccc"></i>
+                <p>No messages</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Reading pane -->
+          <div class="reading-pane">
+            <div v-if="selectedMessage" class="rp-content">
+              <div class="rp-toolbar">
+                <q-btn flat dense no-caps @click="startReply(false)" class="rp-action">
+                  <i class="ph ph-arrow-bend-up-left q-mr-xs"></i> Reply
+                </q-btn>
+                <q-btn flat dense no-caps @click="startReply(true)" class="rp-action">
+                  <i class="ph ph-arrow-bend-double-up-left q-mr-xs"></i> Reply All
+                </q-btn>
+                <q-btn flat dense no-caps @click="startForward()" class="rp-action">
+                  <i class="ph ph-arrow-bend-up-right q-mr-xs"></i> Forward
+                </q-btn>
+              </div>
+              <div class="rp-header">
+                <img v-if="senderPhoto(selectedMessage.from_email)" :src="senderPhoto(selectedMessage.from_email)" class="rp-avatar-img">
+                <div v-else class="rp-avatar" :style="{background: avatarColor(selectedMessage.from_name || selectedMessage.from_email)}">
+                  {{ initials(selectedMessage.from_name || selectedMessage.from_email) }}
+                </div>
+                <div class="rp-header-text">
+                  <div class="rp-subject">{{ selectedMessage.subject }}</div>
+                  <div class="rp-from">
+                    <strong>{{ selectedMessage.from_name }}</strong>
+                    <span class="text-grey-6">&lt;{{ selectedMessage.from_email }}&gt;</span>
+                  </div>
+                  <div class="rp-date text-grey-6">{{ formatFullDate(selectedMessage.local_timestamp) }}</div>
+                </div>
+              </div>
+              <q-separator class="q-my-sm"></q-separator>
+              <iframe :srcdoc="selectedMessage.body || ''" sandbox="allow-same-origin" class="rp-body-frame"></iframe>
+              <!-- Attachments bar -->
+              <div v-if="selectedMessage.attachments && selectedMessage.attachments.length" class="rp-attachments">
+                <div class="rp-att-label"><i class="ph ph-paperclip"></i> Attachments</div>
+                <div class="rp-att-list">
+                  <a v-for="att in selectedMessage.attachments" :key="att.name" class="rp-att-item"
+                     :href="'api/mail/messages/' + encodeURIComponent(selectedMessage.email_id) + '/attachments/' + encodeURIComponent(att.name)"
+                     target="_blank" download>
+                    <i class="ph ph-file"></i>
+                    <span class="rp-att-name">{{ att.name }}</span>
+                    <span class="rp-att-size">{{ formatSize(att.size) }}</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+            <div v-else class="rp-empty">
+              <i class="ph ph-envelope-open" style="font-size:64px;color:#ddd"></i>
+              <p class="text-grey-5">Select a message to read</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ─── Compose view (replaces mail layout) ────────── -->
+        <div v-if="view === 'mail' && composeMode" class="compose-view">
+          <div class="compose-header">
+            <q-btn flat dense round @click="composeMode = false">
+              <i class="ph ph-x"></i>
+            </q-btn>
+            <span class="compose-title">{{ compose.replyTo ? (compose.isForward ? 'Forward' : 'Reply') : 'New Message' }}</span>
+            <q-space></q-space>
+            <q-btn flat no-caps @click="discardCompose" class="q-mr-sm compose-discard-btn">
+              <i class="ph ph-trash q-mr-xs"></i> Discard
+            </q-btn>
+            <q-btn color="primary" no-caps @click="sendCompose" :loading="sending" class="compose-send-btn">
+              <i class="ph ph-paper-plane-tilt q-mr-xs"></i> Send
+            </q-btn>
+          </div>
+          <div class="compose-body">
+            <div class="compose-field">
+              <label>To</label>
+              <div class="compose-to-wrapper">
+                <span v-for="(addr, i) in compose.toList" :key="'to-'+i" class="to-chip">
+                  {{ addr }} <i class="ph ph-x to-chip-remove" @click="removeRecipient('to', i)"></i>
+                </span>
+                <input v-model="compose.toInput" placeholder="Add recipients"
+                       @keydown.enter.prevent="addRecipient('to')"
+                       @keydown.tab.prevent="addRecipient('to')"
+                       @input="onToInput" class="compose-to-input">
+              </div>
+              <!-- People autocomplete -->
+              <div v-if="toSuggestions.length" class="to-suggestions">
+                <div v-for="p in toSuggestions" :key="p.id" class="to-suggestion" @mousedown.prevent="pickSuggestion(p)">
+                  <div class="suggestion-avatar" :style="{background: avatarColor(p.display_name)}">
+                    {{ p.initials }}
+                  </div>
+                  <div>
+                    <div class="suggestion-name">{{ p.display_name }}</div>
+                    <div class="suggestion-email">{{ p.email }}</div>
+                  </div>
+                </div>
+              </div>
+              <a v-if="!showCcBcc" href="#" class="compose-ccbcc-link" @click.prevent="showCcBcc = true">Add Cc/Bcc</a>
+            </div>
+            <!-- CC field -->
+            <div v-if="showCcBcc" class="compose-field">
+              <label>Cc</label>
+              <div class="compose-to-wrapper">
+                <span v-for="(addr, i) in compose.ccList" :key="'cc-'+i" class="to-chip">
+                  {{ addr }} <i class="ph ph-x to-chip-remove" @click="removeRecipient('cc', i)"></i>
+                </span>
+                <input v-model="compose.ccInput" placeholder="Add Cc recipients"
+                       @keydown.enter.prevent="addRecipient('cc')"
+                       @keydown.tab.prevent="addRecipient('cc')"
+                       class="compose-to-input">
+              </div>
+            </div>
+            <!-- BCC field -->
+            <div v-if="showCcBcc" class="compose-field">
+              <label>Bcc</label>
+              <div class="compose-to-wrapper">
+                <span v-for="(addr, i) in compose.bccList" :key="'bcc-'+i" class="to-chip">
+                  {{ addr }} <i class="ph ph-x to-chip-remove" @click="removeRecipient('bcc', i)"></i>
+                </span>
+                <input v-model="compose.bccInput" placeholder="Add Bcc recipients"
+                       @keydown.enter.prevent="addRecipient('bcc')"
+                       @keydown.tab.prevent="addRecipient('bcc')"
+                       class="compose-to-input">
+              </div>
+            </div>
+            <div class="compose-field">
+              <label>Subject</label>
+              <input v-model="compose.subject">
+            </div>
+            <div class="compose-format-toolbar">
+              <i class="ph ph-text-b" title="Bold"></i>
+              <i class="ph ph-text-italic" title="Italic"></i>
+              <i class="ph ph-text-underline" title="Underline"></i>
+              <span class="compose-toolbar-sep"></span>
+              <i class="ph ph-list-bullets" title="Bulleted list"></i>
+              <i class="ph ph-list-numbers" title="Numbered list"></i>
+              <span class="compose-toolbar-sep"></span>
+              <i class="ph ph-paperclip" title="Attach file"></i>
+              <i class="ph ph-link" title="Insert link"></i>
+            </div>
+            <textarea v-model="compose.body" class="compose-editor" placeholder="Write your message..."></textarea>
+          </div>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════ -->
+        <!-- CALENDAR VIEW                                     -->
+        <!-- ══════════════════════════════════════════════════ -->
+        <div v-if="view === 'calendar'" class="calendar-layout">
+
+          <!-- Calendar sidebar -->
+          <div class="cal-sidebar">
+            <!-- Mini calendar -->
+            <div class="mini-cal">
+              <div class="mini-cal-header">
+                <q-btn flat dense round size="sm" @click="miniCalPrev"><i class="ph ph-caret-left"></i></q-btn>
+                <span class="mini-cal-title">{{ miniCalMonthName }} {{ miniCalYear }}</span>
+                <q-btn flat dense round size="sm" @click="miniCalNext"><i class="ph ph-caret-right"></i></q-btn>
+              </div>
+              <div class="mini-cal-grid">
+                <div class="mini-cal-dow" v-for="d in ['M','T','W','T','F','S','S']" :key="d">{{ d }}</div>
+                <div v-for="(day, i) in miniCalDays" :key="i"
+                     class="mini-cal-day"
+                     :class="{other: !day.currentMonth, today: day.isToday, selected: day.date === selectedCalDate}"
+                     @click="goToDate(day.date)">
+                  {{ day.day }}
+                </div>
+              </div>
+            </div>
+            <q-separator class="q-my-sm"></q-separator>
+            <q-btn flat dense no-caps @click="goToToday" class="q-mb-sm full-width" color="primary">
+              <i class="ph ph-calendar-check q-mr-xs"></i> Today
+            </q-btn>
+          </div>
+
+          <!-- Calendar main -->
+          <div class="cal-main">
+            <div class="cal-toolbar">
+              <q-btn flat dense round @click="calPrev"><i class="ph ph-caret-left"></i></q-btn>
+              <q-btn flat dense round @click="calNext"><i class="ph ph-caret-right"></i></q-btn>
+              <span v-if="calViewMode === 'month'" class="cal-month-title">{{ calMonthName }} {{ calYear }}</span>
+              <span v-else-if="calViewMode === 'week'" class="cal-month-title">{{ calWeekLabel }}</span>
+              <span v-else class="cal-month-title">{{ calDayLabel }}</span>
+              <q-space></q-space>
+              <div class="cal-view-toggle">
+                <q-btn flat dense no-caps :class="{'cal-view-active': calViewMode === 'day'}" @click="calViewMode = 'day'" size="sm">Day</q-btn>
+                <q-btn flat dense no-caps :class="{'cal-view-active': calViewMode === 'week'}" @click="calViewMode = 'week'" size="sm">Week</q-btn>
+                <q-btn flat dense no-caps :class="{'cal-view-active': calViewMode === 'month'}" @click="calViewMode = 'month'" size="sm">Month</q-btn>
+              </div>
+              <q-btn flat dense no-caps @click="goToToday" color="primary" class="q-ml-sm">Today</q-btn>
+            </div>
+
+            <!-- ── MONTH VIEW ──────────────────────────────── -->
+            <div v-if="calViewMode === 'month'" class="cal-grid">
+              <div class="cal-dow-row">
+                <div class="cal-dow" v-for="d in ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']" :key="d">{{ d }}</div>
+              </div>
+              <div class="cal-week" v-for="(week, wi) in calendarGrid" :key="wi">
+                <div v-for="(day, di) in week" :key="di"
+                     class="cal-cell" :class="{other: !day.currentMonth, today: day.isToday}"
+                     @contextmenu.prevent="showCalContextMenu($event, day.date)">
+                  <div class="cal-cell-header">
+                    <span class="cal-day-num" :class="{today: day.isToday}">{{ day.day }}</span>
+                  </div>
+                  <div class="cal-events">
+                    <div v-for="ev in day.events.slice(0, 3)" :key="ev.id" class="cal-event"
+                         :class="[ev.is_all_day ? 'all-day' : '', eventShowAsClass(ev)]" :title="ev.subject"
+                         @click.stop="openEvent(ev)"
+                         @contextmenu.prevent.stop="showContextMenu($event, 'calendar', ev)">
+                      <span v-if="!ev.is_all_day" class="cal-event-time">{{ formatTime(ev.start_time) }}</span>
+                      {{ ev.subject }}
+                    </div>
+                    <div v-if="day.events.length > 3" class="cal-more">
+                      +{{ day.events.length - 3 }} more
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── WEEK VIEW ───────────────────────────────── -->
+            <div v-if="calViewMode === 'week'" class="cal-week-view">
+              <!-- All-day row -->
+              <div class="cal-week-allday-row">
+                <div class="cal-time-col"></div>
+                <div v-for="col in calWeekGrid" :key="'ad-'+col.date" class="cal-day-col cal-allday-cell">
+                  <div v-for="ev in col.allDayEvents" :key="ev.id"
+                       class="cal-event all-day" :class="eventShowAsClass(ev)"
+                       @click="openEvent(ev)" :title="ev.subject">
+                    {{ ev.subject }}
+                  </div>
+                </div>
+              </div>
+              <!-- Day headers -->
+              <div class="cal-week-header">
+                <div class="cal-time-col"></div>
+                <div v-for="col in calWeekGrid" :key="'wh-'+col.date"
+                     class="cal-day-col cal-week-day-header" :class="{today: col.isToday}">
+                  <span class="cal-week-dow">{{ col.weekday }}</span>
+                  <span class="cal-day-num" :class="{today: col.isToday}">{{ col.day }}</span>
+                </div>
+              </div>
+              <!-- Time grid -->
+              <div class="cal-time-grid">
+                <div class="cal-time-col">
+                  <div v-for="h in CAL_HOURS" :key="h" class="cal-time-label">{{ h }}:00</div>
+                </div>
+                <div v-for="col in calWeekGrid" :key="'wc-'+col.date" class="cal-day-col"
+                     @contextmenu.prevent="showCalContextMenu($event, col.date)">
+                  <div v-for="h in CAL_HOURS" :key="h" class="cal-hour-line"></div>
+                  <!-- Current time indicator -->
+                  <div v-if="col.isToday" class="cal-now-line" :style="{top: currentTimeTop()}"></div>
+                  <!-- Timed events -->
+                  <div v-for="ev in col.timedEvents" :key="ev.id"
+                       class="cal-time-event" :class="eventShowAsClass(ev)"
+                       :style="timeEventStyle(ev)"
+                       @click.stop="openEvent(ev)"
+                       @contextmenu.prevent.stop="showContextMenu($event, 'calendar', ev)"
+                       :title="ev.subject">
+                    <div class="cal-time-event-time">{{ formatTime(ev.start_time) }}</div>
+                    <div class="cal-time-event-title">{{ ev.subject }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── DAY VIEW ────────────────────────────────── -->
+            <div v-if="calViewMode === 'day'" class="cal-day-view">
+              <!-- All-day events -->
+              <div v-if="calDayEvents.allDay.length" class="cal-day-allday">
+                <div class="cal-time-col"><span class="cal-time-label" style="line-height:28px">All day</span></div>
+                <div class="cal-day-col cal-allday-cell" style="flex:1">
+                  <div v-for="ev in calDayEvents.allDay" :key="ev.id"
+                       class="cal-event all-day" :class="eventShowAsClass(ev)"
+                       @click="openEvent(ev)" :title="ev.subject">
+                    {{ ev.subject }}
+                  </div>
+                </div>
+              </div>
+              <!-- Time grid (single column) -->
+              <div class="cal-time-grid">
+                <div class="cal-time-col">
+                  <div v-for="h in CAL_HOURS" :key="h" class="cal-time-label">{{ h }}:00</div>
+                </div>
+                <div class="cal-day-col" style="flex:1"
+                     @contextmenu.prevent="showCalContextMenu($event, new Date(calSelectedDay).toISOString().slice(0,10))">
+                  <div v-for="h in CAL_HOURS" :key="h" class="cal-hour-line"></div>
+                  <!-- Current time indicator -->
+                  <div v-if="calDayIsToday" class="cal-now-line" :style="{top: currentTimeTop()}"></div>
+                  <!-- Timed events -->
+                  <div v-for="ev in calDayEvents.timed" :key="ev.id"
+                       class="cal-time-event" :class="eventShowAsClass(ev)"
+                       :style="timeEventStyle(ev)"
+                       @click.stop="openEvent(ev)"
+                       @contextmenu.prevent.stop="showContextMenu($event, 'calendar', ev)"
+                       :title="ev.subject">
+                    <div class="cal-time-event-time">{{ formatTime(ev.start_time) }}</div>
+                    <div class="cal-time-event-title">{{ ev.subject }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="loadingCal" class="cal-loading">
+              <q-spinner color="primary" size="32px"></q-spinner>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════ -->
+        <!-- CHAT VIEW                                         -->
+        <!-- ══════════════════════════════════════════════════ -->
+        <div v-if="view === 'chat'" class="chat-layout">
+
+          <!-- Chat sidebar -->
+          <div class="chat-sidebar">
+            <div class="chat-sidebar-header">
+              <div class="ml-search">
+                <i class="ph ph-magnifying-glass"></i>
+                <input v-model="chatSearch" placeholder="Search chats">
+              </div>
+            </div>
+            <div class="chat-list">
+              <div v-if="loadingChat" class="ml-loading">
+                <q-spinner color="primary" size="24px"></q-spinner>
+              </div>
+              <div v-for="c in filteredChats" :key="c.id"
+                   class="chat-list-item" :class="{active: selectedChat && selectedChat.id === c.id}"
+                   @click="openChat(c.id)">
+                <div v-if="c.type === 'meeting'" class="chat-item-avatar" style="background: #e3008c">
+                  <i class="ph ph-calendar-blank" style="font-size:16px"></i>
+                </div>
+                <div v-else-if="c.type === 'group'" class="chat-item-avatar" style="background: #5c2d91">
+                  <i class="ph ph-users-three" style="font-size:16px"></i>
+                </div>
+                <div v-else class="chat-item-avatar" :style="{background: avatarColor(c.name)}">
+                  {{ initials(c.name) }}
+                </div>
+                <div class="chat-item-content">
+                  <div class="chat-item-top">
+                    <span class="chat-item-name">{{ c.name }}</span>
+                    <span class="chat-item-time">{{ formatShortDate(c.lastMessageTime) }}</span>
+                  </div>
+                  <div class="chat-item-preview">{{ c.lastMessage }}</div>
+                </div>
+              </div>
+              <div v-if="!loadingChat && filteredChats.length === 0" class="ml-empty">
+                <i class="ph ph-chat-circle" style="font-size:48px;color:#ccc"></i>
+                <p>No chats</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Chat conversation -->
+          <div class="chat-main">
+            <template v-if="selectedChat">
+              <div class="chat-main-header">
+                <span class="chat-main-title">{{ selectedChat.name }}</span>
+                <span v-if="selectedChat.memberCount" class="chat-main-members">{{ selectedChat.memberCount }} members</span>
+              </div>
+              <div class="chat-messages">
+                <div v-if="loadingChat" class="ml-loading">
+                  <q-spinner color="primary" size="24px"></q-spinner>
+                </div>
+                <template v-for="(group, gi) in chatMessageGroups" :key="gi">
+                  <div class="chat-date-divider">{{ group.label }}</div>
+                  <template v-for="msg in group.messages" :key="msg.id">
+                    <div v-if="msg.isMine" class="chat-msg-sent">
+                      <div class="chat-bubble">
+                        <div class="chat-bubble-text">{{ msg.text }}</div>
+                        <div class="chat-bubble-time">{{ formatTime(msg.timestamp) }}</div>
+                      </div>
+                      <div v-if="msg.reactions && msg.reactions.length" class="chat-reactions">
+                        <span v-for="r in msg.reactions" :key="r.emoji" class="chat-reaction">{{ r.emoji }} {{ r.count }}</span>
+                      </div>
+                    </div>
+                    <div v-else class="chat-msg-received">
+                      <div class="chat-msg-avatar" :style="{background: avatarColor(msg.senderName)}">
+                        {{ initials(msg.senderName) }}
+                      </div>
+                      <div>
+                        <div class="chat-bubble-sender">{{ msg.senderName }}</div>
+                        <div class="chat-bubble">
+                          <div class="chat-bubble-text">{{ msg.text }}</div>
+                          <div class="chat-bubble-time">{{ formatTime(msg.timestamp) }}</div>
+                        </div>
+                        <div v-if="msg.reactions && msg.reactions.length" class="chat-reactions">
+                          <span v-for="r in msg.reactions" :key="r.emoji" class="chat-reaction">{{ r.emoji }} {{ r.count }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </template>
+              </div>
+              <div class="chat-input-bar">
+                <input v-model="chatInput" placeholder="Type a message" class="chat-input"
+                       @keydown.enter.prevent="sendChat">
+                <q-btn flat dense round @click="sendChat" :disable="!chatInput.trim()">
+                  <i class="ph ph-paper-plane-tilt" style="font-size:18px;color:var(--primary)"></i>
+                </q-btn>
+              </div>
+            </template>
+            <div v-else class="chat-empty">
+              <i class="ph ph-chat-circle" style="font-size:64px;color:#ddd"></i>
+              <p class="text-grey-5">Select a chat to start messaging</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════ -->
+        <!-- TEAMS VIEW                                        -->
+        <!-- ══════════════════════════════════════════════════ -->
+        <div v-if="view === 'teams'" class="teams-layout">
+
+          <!-- Teams sidebar -->
+          <div class="teams-sidebar">
+            <div class="teams-sidebar-header">
+              <span style="font-size:16px;font-weight:600">Your channels</span>
+            </div>
+            <div class="teams-tree">
+              <div v-if="loadingTeams" class="ml-loading">
+                <q-spinner color="primary" size="24px"></q-spinner>
+              </div>
+              <div v-for="t in teams" :key="t.id" class="teams-tree-team">
+                <div class="teams-tree-team-header" @click="toggleTeam(t.id)">
+                  <i class="ph" :class="expandedTeams.includes(t.id) ? 'ph-caret-down' : 'ph-caret-right'" style="font-size:12px"></i>
+                  <div class="teams-team-icon" :style="{background: avatarColor(t.name)}">
+                    {{ initials(t.name) }}
+                  </div>
+                  <span class="teams-team-name">{{ t.name }}</span>
+                </div>
+                <div v-if="expandedTeams.includes(t.id)" class="teams-tree-channels">
+                  <div v-for="ch in t.channels" :key="ch.id"
+                       class="teams-channel-item" :class="{active: selectedChannel && selectedChannel.id === ch.id}"
+                       @click="openChannel(t.id, ch.id)">
+                    <i class="ph ph-hash" style="font-size:14px;color:var(--text-muted)"></i>
+                    <span class="teams-channel-name">{{ ch.name }}</span>
+                    <span v-if="ch.lastActivity" class="teams-channel-date">{{ formatShortDate(ch.lastActivity) }}</span>
+                  </div>
+                </div>
+              </div>
+              <div v-if="!loadingTeams && teams.length === 0" class="ml-empty">
+                <i class="ph ph-users-three" style="font-size:48px;color:#ccc"></i>
+                <p>No teams</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Channel feed -->
+          <div class="teams-main">
+            <template v-if="selectedChannel">
+              <div class="teams-main-header">
+                <span class="teams-main-title">{{ selectedTeam ? selectedTeam.name : '' }}</span>
+                <i class="ph ph-caret-right" style="font-size:12px;color:var(--text-muted);margin:0 4px"></i>
+                <span class="teams-channel-header-name">{{ selectedChannel.name }}</span>
+              </div>
+              <div class="teams-feed">
+                <div v-if="loadingTeams" class="ml-loading">
+                  <q-spinner color="primary" size="24px"></q-spinner>
+                </div>
+                <div v-for="post in channelMessages" :key="post.id" class="team-post">
+                  <div class="team-post-header">
+                    <div class="chat-msg-avatar" :style="{background: avatarColor(post.senderName)}">
+                      {{ initials(post.senderName) }}
+                    </div>
+                    <div>
+                      <span class="team-post-sender">{{ post.senderName }}</span>
+                      <span class="team-post-time">{{ formatFullDate(post.timestamp) }}</span>
+                    </div>
+                  </div>
+                  <div class="team-post-body">{{ post.text }}</div>
+                  <div v-if="post.reactions && post.reactions.length" class="team-post-reactions">
+                    <span v-for="r in post.reactions" :key="r.emoji" class="team-reaction">{{ r.emoji }} {{ r.count }}</span>
+                  </div>
+                  <div class="team-post-actions">
+                    <a href="#" class="team-reply-link" @click.prevent>
+                      <i class="ph ph-chat-dots"></i>
+                      {{ post.replyCount || 0 }} {{ post.replyCount === 1 ? 'reply' : 'replies' }}
+                    </a>
+                  </div>
+                </div>
+                <div v-if="!loadingTeams && channelMessages.length === 0" class="ml-empty">
+                  <i class="ph ph-chat-dots" style="font-size:48px;color:#ccc"></i>
+                  <p>No posts in this channel</p>
+                </div>
+              </div>
+              <div class="teams-input-bar">
+                <q-btn color="primary" no-caps class="teams-post-btn" @click="postInChannel">
+                  <i class="ph ph-pencil-simple q-mr-sm"></i> Post in channel
+                </q-btn>
+              </div>
+            </template>
+            <div v-else class="chat-empty">
+              <i class="ph ph-users-three" style="font-size:64px;color:#ddd"></i>
+              <p class="text-grey-5">Select a channel to view posts</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════ -->
+        <!-- FILES VIEW                                        -->
+        <!-- ══════════════════════════════════════════════════ -->
+        <div v-if="view === 'files'" class="files-layout">
+
+          <!-- Files sidebar -->
+          <div class="files-sidebar">
+            <div class="files-sidebar-header">
+              <span style="font-size:16px;font-weight:600">OneDrive</span>
+            </div>
+            <q-list dense>
+              <q-item clickable v-ripple dense :active="filesNav === 'recent'" active-class="folder-active" @click="filesNav = 'recent'; loadFiles('recent')">
+                <q-item-section avatar class="folder-icon-col"><i class="ph ph-clock"></i></q-item-section>
+                <q-item-section><q-item-label class="folder-label">Home</q-item-label></q-item-section>
+              </q-item>
+              <q-item clickable v-ripple dense :active="filesNav === 'my'" active-class="folder-active" @click="filesNav = 'my'; loadFiles('my')">
+                <q-item-section avatar class="folder-icon-col"><i class="ph ph-folder-user"></i></q-item-section>
+                <q-item-section><q-item-label class="folder-label">My Files</q-item-label></q-item-section>
+              </q-item>
+              <q-item clickable v-ripple dense :active="filesNav === 'shared'" active-class="folder-active" @click="filesNav = 'shared'; loadFiles('shared')">
+                <q-item-section avatar class="folder-icon-col"><i class="ph ph-users"></i></q-item-section>
+                <q-item-section><q-item-label class="folder-label">Shared</q-item-label></q-item-section>
+              </q-item>
+              <q-item clickable v-ripple dense :active="filesNav === 'favorites'" active-class="folder-active" @click="filesNav = 'favorites'; loadFiles('favorites')">
+                <q-item-section avatar class="folder-icon-col"><i class="ph ph-star"></i></q-item-section>
+                <q-item-section><q-item-label class="folder-label">Favorites</q-item-label></q-item-section>
+              </q-item>
+            </q-list>
+          </div>
+
+          <!-- Files main -->
+          <div class="files-main">
+            <div class="files-toolbar">
+              <div class="files-breadcrumb">
+                <span v-for="(crumb, ci) in filePath" :key="crumb.id"
+                      class="files-crumb" @click="navigateFilePath(ci)">
+                  <span v-if="ci > 0" class="files-crumb-sep"><i class="ph ph-caret-right" style="font-size:10px"></i></span>
+                  {{ crumb.name }}
+                </span>
+              </div>
+            </div>
+            <div class="files-content">
+              <div v-if="loadingFiles" class="ml-loading">
+                <q-spinner color="primary" size="24px"></q-spinner>
+              </div>
+              <table v-else class="files-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Modified</th>
+                    <th>Modified By</th>
+                    <th>Size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="f in fileItems" :key="f.id" @click="onFileClick(f)">
+                    <td>
+                      <div style="display:flex;align-items:center;gap:8px">
+                        <i :class="fileIcon(f)" style="font-size:18px;color:var(--primary)"></i>
+                        <span>{{ f.name }}</span>
+                      </div>
+                    </td>
+                    <td>{{ f.modified ? formatShortDate(f.modified) : '' }}</td>
+                    <td>{{ f.modifiedBy || '' }}</td>
+                    <td>{{ f.isFolder ? '' : formatSize(f.size || 0) }}</td>
+                  </tr>
+                  <tr v-if="fileItems.length === 0">
+                    <td colspan="4" style="text-align:center;padding:40px;color:var(--text-muted)">
+                      <i class="ph ph-folder-open" style="font-size:48px;color:#ccc;display:block;margin-bottom:8px"></i>
+                      No files
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════ -->
+        <!-- PEOPLE VIEW                                       -->
+        <!-- ══════════════════════════════════════════════════ -->
+        <div v-if="view === 'people'" class="people-layout">
+          <div class="people-header">
+            <i class="ph ph-magnifying-glass people-search-icon"></i>
+            <input v-model="peopleQuery" placeholder="Search directory" @input="debouncePeopleSearch" class="people-search">
+          </div>
+          <div class="people-grid">
+            <div v-for="p in people" :key="p.id" class="person-card" @click="startMailTo(p)">
+              <img v-if="personPhotoUrl(p)" :src="personPhotoUrl(p)" class="person-photo" @error="onPhotoError(p)">
+              <div v-else class="person-avatar" :style="{background: avatarColor(p.display_name)}">
+                {{ p.initials }}
+              </div>
+              <div class="person-info">
+                <div class="person-name">{{ p.display_name }}</div>
+                <div class="person-email">{{ p.email }}</div>
+                <div v-if="p.job_title" class="person-title">{{ p.job_title }}</div>
+                <div v-if="p.department" class="person-dept">{{ p.department }}</div>
+              </div>
+              <q-btn flat dense round class="person-mail-btn" @click.stop="startMailTo(p)">
+                <i class="ph ph-envelope"></i>
+              </q-btn>
+            </div>
+            <div v-if="people.length === 0 && !loadingPeople" class="people-empty">
+              <i class="ph ph-users" style="font-size:48px;color:#ccc"></i>
+              <p class="text-grey-5">Search for people in your organization</p>
+            </div>
+            <div v-if="loadingPeople" class="people-loading">
+              <q-spinner color="primary" size="32px"></q-spinner>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ─── Context menu ──────────────────────────────────── -->
+      <div v-if="contextMenu.show" class="context-menu" :style="{left: contextMenu.x+'px', top: contextMenu.y+'px'}" @click.stop>
+        <template v-if="contextMenu.type === 'mail'">
+          <div class="ctx-item" @click="ctxReply"><i class="ph ph-arrow-bend-up-left"></i> Reply</div>
+          <div class="ctx-item" @click="ctxReplyAll"><i class="ph ph-arrow-bend-double-up-left"></i> Reply All</div>
+          <div class="ctx-item" @click="ctxForward"><i class="ph ph-arrow-bend-up-right"></i> Forward</div>
+          <div class="ctx-sep"></div>
+          <div class="ctx-item" @click="ctxMarkRead"><i class="ph ph-envelope-open"></i> Mark as Read</div>
+          <div class="ctx-item" @click="ctxMarkUnread"><i class="ph ph-envelope"></i> Mark as Unread</div>
+          <div class="ctx-sep"></div>
+          <div class="ctx-item ctx-danger" @click="ctxDelete"><i class="ph ph-trash"></i> Delete</div>
+        </template>
+        <template v-if="contextMenu.type === 'calendar'">
+          <div class="ctx-item" @click="ctxOpenEvent"><i class="ph ph-calendar-blank"></i> Open Details</div>
+          <div class="ctx-item" @click="ctxCopyEvent"><i class="ph ph-copy"></i> Copy to Clipboard</div>
+        </template>
+      </div>
+
+      <!-- ─── Calendar cell context menu (right-click to create) ── -->
+      <div v-if="calCtxMenu.show" class="context-menu" :style="{left: calCtxMenu.x+'px', top: calCtxMenu.y+'px'}" @click.stop>
+        <div class="ctx-item" @click="openNewEventFromCtx"><i class="ph ph-plus"></i> New Event</div>
+      </div>
+
+      <!-- ─── New event dialog ─────────────────────────────────── -->
+      <q-dialog v-model="showNewEventDialog">
+        <q-card style="min-width:400px;border-radius:8px">
+          <q-card-section>
+            <div style="font-size:18px;font-weight:600">New Event</div>
+          </q-card-section>
+          <q-separator></q-separator>
+          <q-card-section>
+            <div class="compose-field">
+              <label>Subject</label>
+              <input v-model="newEvent.subject" placeholder="Add a title" style="width:100%;border:none;border-bottom:1px solid var(--border);padding:8px 0;font-size:14px;outline:none;cursor:text">
+            </div>
+            <div class="compose-field">
+              <label>Date</label>
+              <input v-model="newEvent.date" type="date" style="width:100%;border:none;border-bottom:1px solid var(--border);padding:8px 0;font-size:14px;outline:none;cursor:text">
+            </div>
+            <div style="display:flex;gap:16px">
+              <div class="compose-field" style="flex:1">
+                <label>Start Time</label>
+                <input v-model="newEvent.startTime" type="time" style="width:100%;border:none;border-bottom:1px solid var(--border);padding:8px 0;font-size:14px;outline:none;cursor:text">
+              </div>
+              <div class="compose-field" style="flex:1">
+                <label>End Time</label>
+                <input v-model="newEvent.endTime" type="time" style="width:100%;border:none;border-bottom:1px solid var(--border);padding:8px 0;font-size:14px;outline:none;cursor:text">
+              </div>
+            </div>
+            <div class="compose-field">
+              <label>Location</label>
+              <input v-model="newEvent.location" placeholder="Add a location" style="width:100%;border:none;border-bottom:1px solid var(--border);padding:8px 0;font-size:14px;outline:none;cursor:text">
+            </div>
+          </q-card-section>
+          <q-separator></q-separator>
+          <q-card-actions align="right">
+            <q-btn flat no-caps @click="showNewEventDialog = false" color="grey">Cancel</q-btn>
+            <q-btn no-caps color="primary" @click="submitNewEvent">Save</q-btn>
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
+
+      <!-- ─── Calendar event detail dialog ──────────────────── -->
+      <q-dialog v-model="showEventDialog">
+        <q-card class="event-dialog" v-if="selectedEvent">
+          <q-card-section class="event-dialog-header">
+            <div class="event-dialog-title">{{ selectedEvent.subject }}</div>
+            <q-btn flat dense round @click="closeEventDialog" class="event-dialog-close">
+              <i class="ph ph-x"></i>
+            </q-btn>
+          </q-card-section>
+          <q-separator></q-separator>
+          <q-card-section class="event-dialog-body">
+            <div class="event-detail-row">
+              <i class="ph ph-clock"></i>
+              <div>
+                <div>{{ formatFullDate(selectedEvent.start_time) }}</div>
+                <div class="text-grey-6">to {{ formatFullDate(selectedEvent.end_time) }}</div>
+              </div>
+            </div>
+            <div v-if="selectedEvent.location" class="event-detail-row">
+              <i class="ph ph-map-pin"></i>
+              <div>{{ selectedEvent.location }}</div>
+            </div>
+            <div v-if="selectedEvent.organizer" class="event-detail-row">
+              <i class="ph ph-user"></i>
+              <div>
+                <div class="event-detail-label">Organizer</div>
+                <div>{{ selectedEvent.organizer.name || selectedEvent.organizer.email || selectedEvent.organizer }}</div>
+              </div>
+            </div>
+            <div v-if="selectedEvent.attendees && selectedEvent.attendees.length" class="event-detail-row">
+              <i class="ph ph-users"></i>
+              <div>
+                <div class="event-detail-label">Attendees</div>
+                <div v-for="a in selectedEvent.attendees" :key="a.email || a" class="event-attendee">
+                  {{ a.name || a.email || a }}
+                </div>
+              </div>
+            </div>
+            <div v-if="selectedEvent.online_meeting_url" class="event-detail-row">
+              <i class="ph ph-video-camera"></i>
+              <div>
+                <a :href="selectedEvent.online_meeting_url" target="_blank" class="event-meeting-link">
+                  Join online meeting
+                </a>
+              </div>
+            </div>
+            <div v-if="selectedEvent.body_preview" class="event-detail-row">
+              <i class="ph ph-note"></i>
+              <div class="event-body-preview">{{ selectedEvent.body_preview }}</div>
+            </div>
+          </q-card-section>
+        </q-card>
+      </q-dialog>
+
+      <!-- ─── Settings panel dialog ─────────────────────────── -->
+      <q-dialog v-model="showSettings" position="right">
+        <q-card class="settings-panel">
+          <q-card-section class="settings-header">
+            <div class="settings-title"><i class="ph ph-gear q-mr-sm"></i> Settings</div>
+            <q-btn flat dense round @click="closeSettings">
+              <i class="ph ph-x"></i>
+            </q-btn>
+          </q-card-section>
+          <q-separator></q-separator>
+          <q-card-section class="settings-body">
+            <div class="settings-group">
+              <div class="settings-group-title">Appearance</div>
+              <div class="settings-row">
+                <span>Theme</span>
+                <span class="settings-value">Light</span>
+              </div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-group-title">Status</div>
+              <div class="settings-row">
+                <span>Mode</span>
+                <span class="settings-badge">Mock Mode</span>
+              </div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-group-title">About</div>
+              <div class="settings-row">
+                <span>Version</span>
+                <span class="settings-value">{{ APP_VERSION }}</span>
+              </div>
+              <div class="settings-row">
+                <span>Source</span>
+                <a href="https://github.com/office-connect" target="_blank" class="settings-link">
+                  <i class="ph ph-github-logo q-mr-xs"></i> GitHub
+                </a>
+              </div>
+            </div>
+          </q-card-section>
+        </q-card>
+      </q-dialog>
+
+    </q-layout>
+  </div>
+
+<script src="vendor/vue.global.prod.js"></script>
+<script src="vendor/quasar.umd.prod.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
