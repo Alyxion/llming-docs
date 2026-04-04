@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "llming-docs"
-version = "0.1.0"
+version = "0.1.1"
 description = "Document plugin system — rich document creation and editing via MCP tools"
 authors = ["Michael Ikemann"]
 license = "MIT"
