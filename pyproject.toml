@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "llming-docs"
-version = "0.1.1"
+version = "0.1.0"
 description = "Document plugin system — rich document creation and editing via MCP tools"
 authors = ["Michael Ikemann"]
 license = "MIT"
@@ -20,7 +20,7 @@ packages = [{include = "llming_docs"}]
 "Author" = "https://github.com/Alyxion"
 
 [tool.poetry.dependencies]
-python = ">=3.14"
+python = ">=3.14,<4"
 pydantic = "*"
 llming-models = ">=0.1.0"
 
