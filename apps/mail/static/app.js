@@ -50,6 +50,28 @@ const app = createApp({
     const csrfToken = ref('');
     const view = ref('mail');
 
+    // ── theme (light/dark) ─────────────────────────────────
+    // Initialise from localStorage → prefers-color-scheme → 'light'.
+    function _initialTheme() {
+      try {
+        const stored = localStorage.getItem('mail_theme');
+        if (stored === 'dark' || stored === 'light') return stored;
+      } catch { /* storage may be blocked */ }
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+      }
+      return 'light';
+    }
+    const theme = ref(_initialTheme());
+    function applyTheme(t) {
+      document.documentElement.setAttribute('data-theme', t);
+      try { localStorage.setItem('mail_theme', t); } catch {}
+    }
+    function toggleTheme() { theme.value = theme.value === 'dark' ? 'light' : 'dark'; }
+    // Apply immediately so there's no flash before the watcher fires.
+    applyTheme(theme.value);
+    watch(theme, applyTheme);
+
     // ── mail state ─────────────────────────────────────────
     const folders = ref([]);
     const selectedFolder = ref('');
@@ -157,8 +179,33 @@ const app = createApp({
       const headers = { 'Content-Type': 'application/json' };
       if (csrfToken.value) headers['X-CSRF-Token'] = csrfToken.value;
       const res = await fetch(path, { ...opts, headers: { ...headers, ...(opts || {}).headers } });
-      if (res.status === 401) { authenticated.value = false; throw new Error('Not authenticated'); }
-      if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
+      if (res.status === 401) {
+        // Mail session expired (in-memory registry) but identity cookie may still
+        // be valid — a page reload re-registers the mail session via /mailview.
+        // First 401 triggers reload; if that still 401s, show login screen.
+        if (window.__MAIL_CONFIG__ && !sessionStorage.getItem('mail_reloaded_on_401')) {
+          sessionStorage.setItem('mail_reloaded_on_401', '1');
+          location.reload();
+          throw new Error('Not authenticated — reloading');
+        }
+        sessionStorage.removeItem('mail_reloaded_on_401');
+        authenticated.value = false;
+        throw new Error('Not authenticated');
+      }
+      if (!res.ok) {
+        const t = await res.text();
+        // Surface a readable message: prefer a JSON `error`/`detail` field over
+        // the raw JSON body, which would otherwise appear inside an error toast.
+        let msg = t || res.statusText;
+        try {
+          const j = JSON.parse(t);
+          msg = j.error || j.detail || j.message || t;
+        } catch { /* not JSON */ }
+        throw new Error(msg);
+      }
+      // Successful response — clear any stale reload-retry flag so a later
+      // 401 can trigger a fresh reload attempt.
+      sessionStorage.removeItem('mail_reloaded_on_401');
       return res.json();
     }
 
@@ -261,6 +308,30 @@ const app = createApp({
 
       return 'Older';
     }
+
+    // Wrap the current message's HTML with a theme-aware prelude so the
+    // iframe body picks up the dark palette.  Emails author their own colors
+    // (inline tables, bgcolor attrs, explicit CSS), so we use !important on
+    // the base body + catch-all to override without mangling layout.  Images
+    // keep a neutral light backdrop so sender logos on white stay legible.
+    const messageBodyDoc = computed(() => {
+      const html = (selectedMessage.value && selectedMessage.value.body) || '';
+      if (theme.value !== 'dark') return html;
+      const prelude = `<style>
+        html, body { background: #181c22 !important; color: #e6e8eb !important; }
+        body, body table, body td, body div, body span, body p, body li,
+        body h1, body h2, body h3, body h4, body h5, body h6,
+        body strong, body em, body blockquote {
+          background-color: transparent !important;
+          color: #e6e8eb !important;
+        }
+        body a { color: #4aa3ec !important; }
+        body hr { border-color: #2a2f38 !important; }
+        body img { background-color: #fff; }
+        body pre, body code { background-color: #0e1116 !important; color: #e6e8eb !important; }
+      </style>`;
+      return prelude + html;
+    });
 
     const groupedMessages = computed(() => {
       const order = ['Today', 'Yesterday', 'This Week', 'Last Week', 'This Month', 'Older'];
@@ -384,8 +455,11 @@ const app = createApp({
           const csrf = await api('csrf-token');
           csrfToken.value = csrf.token;
           loadProfile();
+          // Await the email map BEFORE folders so messages render with the
+          // correct sender photos on first paint (avoids a flash of initials
+          // while the directory populates in the background).
+          await loadEmailMap();
           loadFolders();
-          loadEmailMap();
         }
       } catch { /* not logged in */ }
     }
@@ -398,6 +472,16 @@ const app = createApp({
       try {
         const data = await api('api/people/email-map');
         emailMap.value = data || {};
+        // If empty (directory still populating server-side), retry once
+        // after a delay so inbox avatars replace initials with real photos.
+        if (Object.keys(emailMap.value).length === 0) {
+          setTimeout(async () => {
+            try {
+              const retry = await api('api/people/email-map');
+              if (retry && Object.keys(retry).length > 0) emailMap.value = retry;
+            } catch {}
+          }, 5000);
+        }
       } catch { /* ignore - feature may not be available */ }
     }
 
@@ -426,7 +510,7 @@ const app = createApp({
     async function loadMessages() {
       loadingMail.value = true;
       try {
-        const data = await api('api/mail/messages?folder_id=' + encodeURIComponent(selectedFolder.value) + '&limit=50');
+        const data = await api('api/mail/folders/' + encodeURIComponent(selectedFolder.value) + '/messages?limit=50');
         messages.value = data.messages;
         filterMessages();
       } catch (e) { toast('Failed to load messages: ' + e.message, 'error'); }
@@ -447,7 +531,7 @@ const app = createApp({
             // Only mark if this message is still the selected one
             if (selectedMessage.value && selectedMessage.value.email_id === id) {
               msg.is_read = true;
-              api('api/mail/read/' + encodeURIComponent(id), { method: 'PATCH' }).catch(() => {});
+              api('api/mail/messages/' + encodeURIComponent(id) + '/read', { method: 'PATCH' }).catch(() => {});
             }
             _readTimer = null;
           }, 3500);
@@ -551,14 +635,17 @@ const app = createApp({
       sending.value = true;
       try {
         if (compose.replyTo && !compose.isForward) {
-          await api('api/mail/reply', {
+          await api('api/mail/messages/' + encodeURIComponent(compose.replyTo) + '/reply', {
             method: 'POST',
-            body: JSON.stringify({ message_id: compose.replyTo, body: compose.body, reply_all: false }),
+            body: JSON.stringify({ comment: compose.body, replyAll: false }),
           });
         } else {
           await api('api/mail/send', {
             method: 'POST',
-            body: JSON.stringify({ to: compose.toList, subject: compose.subject, body: compose.body }),
+            body: JSON.stringify({
+              to: compose.toList, cc: compose.ccList, bcc: compose.bccList,
+              subject: compose.subject, body: compose.body,
+            }),
           });
         }
         toast('Message sent');
@@ -1114,24 +1201,42 @@ const app = createApp({
     // LIFECYCLE
     // ════════════════════════════════════════════════════════
 
+    // Keyboard shortcuts (top-level only for now: T toggles theme).
+    function onGlobalKeydown(e) {
+      // Ignore when typing in inputs, textareas or contentEditable elements.
+      const t = e.target;
+      const tag = t && t.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (t && t.isContentEditable) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 't' || e.key === 'T') {
+        toggleTheme();
+        e.preventDefault();
+      }
+    }
+
     onMounted(() => {
       checkAuth();
       document.addEventListener('click', onDocumentClick);
+      document.addEventListener('keydown', onGlobalKeydown);
     });
 
     onUnmounted(() => {
       document.removeEventListener('click', onDocumentClick);
+      document.removeEventListener('keydown', onGlobalKeydown);
     });
 
     return {
       // core
-      authenticated, profile, view,
+      authenticated, profile, view, theme, toggleTheme,
       // mail
       folders, selectedFolder, currentFolderName, messages, filteredMessages,
       mailSearch, selectedMessage, loadingMail,
       selectFolder, openMessage, filterMessages,
       // email map / photos
       emailMap, senderPhoto,
+      // theme-aware iframe source
+      messageBodyDoc,
       // grouped messages
       groupedMessages,
       // compose

@@ -54,6 +54,12 @@
           </q-btn>
         </div>
         <div class="rail-bottom">
+          <q-btn flat round class="rail-btn" @click="toggleTheme" aria-label="Toggle theme">
+            <i :class="theme === 'dark' ? 'ph ph-sun' : 'ph ph-moon'"></i>
+            <q-tooltip anchor="center right" self="center left" :offset="[8,0]">
+              {{ theme === 'dark' ? 'Light theme' : 'Dark theme' }} (T)
+            </q-tooltip>
+          </q-btn>
           <q-btn flat round class="rail-btn" @click="openSettings">
             <i class="ph ph-gear"></i>
             <q-tooltip anchor="center right" self="center left" :offset="[8,0]">Settings</q-tooltip>
@@ -164,7 +170,7 @@
                 </div>
               </div>
               <q-separator class="q-my-sm"></q-separator>
-              <iframe :srcdoc="selectedMessage.body || ''" sandbox="allow-same-origin" class="rp-body-frame"></iframe>
+              <iframe :srcdoc="messageBodyDoc" sandbox="allow-same-origin" class="rp-body-frame"></iframe>
               <!-- Attachments bar -->
               <div v-if="selectedMessage.attachments && selectedMessage.attachments.length" class="rp-attachments">
                 <div class="rp-att-label"><i class="ph ph-paperclip"></i> Attachments</div>
