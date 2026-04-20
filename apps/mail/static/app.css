@@ -2,10 +2,14 @@
    office-connect — Outlook-style theme
    ═══════════════════════════════════════════════════════════════ */
 
-:root {
+:root, :root[data-mail-theme="light"] {
+  /* Tell the UA this page handles its own colour scheme — suppresses
+     Chrome's "auto dark mode" which would otherwise force-invert our
+     hardcoded light backgrounds and break contrast. */
+  color-scheme: light;
   --rail-w: 48px;
-  --sidebar-w: 220px;
-  --list-w: 360px;
+  --sidebar-w: 240px;
+  --list-w: 420px;
   --primary: #0078d4;
   --primary-light: #deecf9;
   --bg: #f5f5f5;
@@ -18,21 +22,73 @@
   --active: #edebe9;
   --unread-bg: #fff;
   --read-bg: #fafaf9;
+  /* Panel + header backgrounds — every surface that used to be
+     hardcoded light (#fafafa, #f0f0f0, #f5f5f5) now references one of
+     these so dark mode flips cleanly. */
+  --panel-bg: #fafafa;          /* folder sidebar, compose header, attachments strip */
+  --panel-bg-2: #f0f0f0;        /* nav rail, toggle pill tracks */
+  --header-bg: #f5f5f5;         /* message-list header */
+  --body-bg: #fff;              /* email body reading surface */
+  /* Font stacks — "Segoe UI" on Windows (Outlook-native look), system
+     fallback everywhere else.  The body-frame iframe uses the same
+     stack injected through the iframe ``<style>`` (see app.js). */
+  --font-ui: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, 'Helvetica Neue', Roboto, Arial, sans-serif;
+  --font-body: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, 'Helvetica Neue', Roboto, Arial, sans-serif;
+}
+
+/* Dark-mode variable set — kicks in when the host publishes
+   ``theme: 'dark'`` via __MAIL_CONFIG__.hooks and we mirror it onto the
+   <html data-mail-theme="dark"> attribute. */
+:root[data-mail-theme="dark"] {
+  color-scheme: dark;
+  --primary: #2b88d8;
+  --primary-light: #1b2d3e;
+  --bg: #1b1a19;
+  --surface: #252423;
+  --border: #3b3a39;
+  --text: #f3f2f1;
+  --text-secondary: #c8c6c4;
+  --text-muted: #8a8886;
+  --hover: #323130;
+  --active: #3b3a39;
+  --unread-bg: #252423;
+  --read-bg: #201f1e;
+  --panel-bg: #2d2c2b;
+  --panel-bg-2: #1f1e1d;
+  --header-bg: #1f1e1d;
+  --body-bg: #2b2a29;
 }
 
 * { box-sizing: border-box; cursor: default; }
 html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
-  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  font-family: var(--font-ui);
   font-size: 14px; color: var(--text); }
 /* Only content areas get text cursor */
 .rp-body-frame, .compose-editor, .compose-to-input,
 .compose-field input, .ml-search input, .people-search,
 .chat-input { cursor: text; }
 a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
+.q-item--clickable, .q-menu .q-item[clickable], .q-menu .q-item,
 .cal-event, .person-card, .to-chip-remove, .ctx-item,
 .chat-list-item, .chat-reaction, .teams-tree-team-header,
 .teams-channel-item, .team-reaction, .team-reply-link,
 .files-crumb, .files-table tbody tr { cursor: pointer; }
+
+/* Dark-mode theming for Quasar popovers (q-menu, q-list) — used by
+   the "Trust ▾" banner menu and any future dropdowns.  Without this
+   the items fall back to Quasar's hardcoded light colours and the
+   text greys out on the already-light default background, making the
+   menu look disabled. */
+.q-menu {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border);
+}
+.q-menu .q-item { color: var(--text); }
+.q-menu .q-item:hover,
+.q-menu .q-item.q-manual-focusable--focused { background: var(--hover); }
+.q-menu .q-item__label--caption,
+.q-menu .q-item__label.text-caption { color: var(--text-secondary); }
 
 /* ── Login screen ───────────────────────────────────────────── */
 .login-screen {
@@ -53,7 +109,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 /* ── Nav rail ───────────────────────────────────────────────── */
 .nav-rail {
   position: fixed; left: 0; top: 0; bottom: 0; width: var(--rail-w);
-  background: #f0f0f0; border-right: 1px solid var(--border);
+  background: var(--panel-bg-2); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; justify-content: space-between;
   z-index: 100; padding: 8px 0;
 }
@@ -73,22 +129,50 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
    ══════════════════════════════════════════════════════════════ */
 .mail-layout { display: flex; width: 100%; height: 100%; }
 
+/* Draggable splitter between panes. 4 px wide with a 1 px visible line. */
+.mail-splitter {
+  flex: 0 0 4px; align-self: stretch;
+  cursor: col-resize; background: transparent;
+  position: relative; z-index: 2;
+}
+.mail-splitter::before {
+  content: ''; position: absolute; left: 1px; top: 0; bottom: 0; width: 1px;
+  background: var(--border);
+}
+.mail-splitter:hover::before { background: var(--primary); width: 2px; }
+
 /* ── Folder sidebar ─────────────────────────────────────────── */
 .folder-sidebar {
   width: var(--sidebar-w); min-width: var(--sidebar-w);
-  background: #fafafa; border-right: 1px solid var(--border);
-  padding: 12px; overflow-y: auto;
+  background: var(--panel-bg); border-right: 1px solid var(--border);
+  padding: 12px 8px; overflow-y: auto;
 }
-.new-mail-btn { width: 100%; border-radius: 20px !important; }
+.new-mail-btn { width: 100%; border-radius: 20px !important; margin-bottom: 12px; }
 .new-mail-btn i { font-size: 16px; }
-.folder-icon-col { min-width: 28px !important; max-width: 28px !important; }
-.folder-icon-col i { font-size: 18px; color: var(--text-secondary); }
-.folder-label { font-size: 13px; }
+.folder-tree { display: flex; flex-direction: column; gap: 1px; }
+.folder-node { }
+.folder-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-radius: 4px; cursor: pointer;
+  font-size: 13px; color: var(--text); min-height: 26px;
+}
+.folder-row:hover { background: var(--hover); }
+.folder-twist {
+  width: 14px; height: 14px; display: inline-flex;
+  align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--text-muted);
+}
+.folder-twist i { font-size: 10px; }
+.folder-twist-pad { pointer-events: none; }
+.folder-icon { font-size: 16px; color: var(--text-secondary); flex-shrink: 0; }
+.folder-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-badge {
   font-size: 11px; font-weight: 600; color: var(--primary);
-  background: var(--primary-light); border-radius: 10px; padding: 1px 7px;
+  background: var(--primary-light); border-radius: 10px; padding: 1px 8px;
+  margin-left: auto;
 }
 .folder-active { background: var(--primary-light) !important; border-radius: 4px; }
+.folder-active .folder-label { color: var(--primary); font-weight: 600; }
 
 /* ── Message list ───────────────────────────────────────────── */
 .message-list-panel {
@@ -101,9 +185,16 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
   display: flex; flex-direction: column; gap: 8px;
 }
 .ml-title { font-size: 16px; font-weight: 600; }
+.ml-offline-pill {
+  display: inline-flex; align-items: center;
+  font-size: 11px; font-weight: 500;
+  color: #8a6d00; background: #fff4cc; border: 1px solid #f2d88a;
+  padding: 2px 8px; border-radius: 10px; width: fit-content;
+}
+.ml-offline-pill i { font-size: 12px; }
 .ml-search {
   display: flex; align-items: center; gap: 8px;
-  background: #f5f5f5; border-radius: 4px; padding: 6px 10px;
+  background: var(--header-bg); border-radius: 4px; padding: 6px 10px;
 }
 .ml-search i { color: var(--text-muted); font-size: 16px; }
 .ml-search input {
@@ -118,14 +209,14 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
   position: sticky; top: 0; z-index: 2;
   padding: 6px 16px;
   font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  background: #f5f5f5; border-bottom: 1px solid var(--border);
+  background: var(--header-bg); border-bottom: 1px solid var(--border);
   letter-spacing: 0.02em;
 }
 
 /* ── Message row ────────────────────────────────────────────── */
 .msg-row {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 10px 16px; padding-left: 19px; cursor: pointer; border-bottom: 1px solid #f0f0f0;
+  padding: 10px 16px; padding-left: 19px; cursor: pointer; border-bottom: 1px solid var(--border);
   background: var(--read-bg); position: relative;
 }
 .msg-row:hover { background: var(--hover); }
@@ -165,12 +256,77 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
   justify-content: center; gap: 12px;
 }
 .rp-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-.rp-toolbar {
-  display: flex; gap: 4px; padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
+/* Subject + action icons sharing a row — Outlook-style. */
+.rp-title-row {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 20px 4px; border-bottom: 1px solid transparent;
 }
-.rp-action i { font-size: 16px; }
-.rp-header { display: flex; gap: 12px; padding: 16px; }
+.rp-title-row .rp-subject {
+  flex: 1; font-size: 17px; font-weight: 600;
+  color: var(--text); line-height: 1.35;
+  margin: 0; overflow-wrap: anywhere;
+}
+.rp-title-actions {
+  display: flex; gap: 2px; flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.rp-title-btn i { font-size: 17px; }
+.rp-title-btn:hover { color: var(--primary); }
+/* Active state for toggle-style title buttons (e.g. mail-body dark). */
+.rp-title-btn-on { color: var(--primary) !important; }
+.rp-title-btn-on::after {
+  content: ''; position: absolute; bottom: 2px; left: 50%;
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--primary); transform: translateX(-50%);
+}
+.rp-title-btn { position: relative; }
+.rp-header { display: flex; gap: 12px; padding: 8px 20px 14px; }
+/* External-image banner — matches Outlook's muted cream bar. */
+.rp-external-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 20px 8px; padding: 8px 12px;
+  background: #fff8e1; border: 1px solid #f2d88a;
+  border-radius: 4px; font-size: 12px; color: #5b4500;
+}
+.rp-external-banner i { font-size: 16px; color: #8a6d00; }
+.rp-external-banner span { flex: 1; }
+.rp-external-btn { color: var(--primary) !important; font-weight: 600; }
+.rp-extras { padding: 0 20px; display: flex; flex-direction: column; gap: 8px; }
+
+/* ── Reactions ────────────────────────────────────────── */
+.rp-reactions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 0 20px 8px; position: relative;
+}
+.rp-react-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 14px;
+  background: var(--hover); border: 1px solid var(--border);
+  cursor: pointer; font-size: 13px; line-height: 1.5;
+  user-select: none;
+}
+.rp-react-chip:hover { background: var(--active); }
+.rp-react-chip.mine { background: var(--primary-light); border-color: var(--primary); }
+.rp-react-count { font-size: 11px; color: var(--text-secondary); font-weight: 600; }
+.rp-react-add i { font-size: 16px; color: var(--text-secondary); }
+.rp-react-picker {
+  position: absolute; top: 100%; left: 20px; z-index: 10;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.12);
+  display: flex; gap: 2px;
+}
+.rp-react-option {
+  padding: 4px 6px; cursor: pointer; font-size: 18px; line-height: 1;
+  border-radius: 50%;
+}
+.rp-react-option:hover { background: var(--hover); }
+
+.msg-react-chip {
+  font-size: 11px; padding: 1px 4px; border-radius: 8px;
+  background: var(--hover); display: inline-flex; align-items: center;
+  line-height: 1;
+}
 .rp-avatar {
   width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -186,14 +342,14 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 .rp-date { font-size: 12px; }
 .rp-body-frame {
   flex: 1; width: 100%; border: none; padding: 0 16px;
-  background: #fff;
+  background: var(--body-bg);
 }
 
 /* ── Reading pane attachments ──────────────────────────────── */
 .rp-attachments {
   border-top: 1px solid var(--border);
   padding: 12px 16px;
-  background: #fafafa;
+  background: var(--panel-bg);
 }
 .rp-att-label {
   font-size: 12px; font-weight: 600; color: var(--text-secondary);
@@ -206,7 +362,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 .rp-att-item {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 12px; border-radius: 4px;
-  border: 1px solid var(--border); background: #fff;
+  border: 1px solid var(--border); background: var(--surface);
   font-size: 13px; cursor: pointer;
   text-decoration: none; color: inherit;
 }
@@ -222,7 +378,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 .compose-header {
   display: flex; align-items: center; gap: 12px;
   padding: 12px 24px; border-bottom: 1px solid var(--border);
-  background: #fafafa;
+  background: var(--panel-bg);
 }
 .compose-title { font-size: 18px; font-weight: 600; }
 .compose-discard-btn { color: var(--text-secondary); }
@@ -260,7 +416,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 }
 .compose-ccbcc-link:hover { text-decoration: underline; }
 .to-suggestions {
-  position: absolute; top: 100%; left: 0; right: 0; background: #fff;
+  position: absolute; top: 100%; left: 0; right: 0; background: var(--surface);
   border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,.1);
   z-index: 10; max-height: 200px; overflow-y: auto;
 }
@@ -276,17 +432,28 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 
 /* ── Compose format toolbar ────────────────────────────────── */
 .compose-format-toolbar {
-  display: flex; align-items: center; gap: 4px;
-  padding: 8px 4px; border: 1px solid var(--border); border-bottom: none;
-  border-radius: 4px 4px 0 0; background: #fafafa;
+  display: flex; align-items: center; gap: 2px;
+  padding: 6px 4px; border: 1px solid var(--border); border-bottom: none;
+  border-radius: 4px 4px 0 0; background: var(--panel-bg);
 }
-.compose-format-toolbar i {
-  font-size: 16px; color: var(--text-secondary); padding: 4px 8px;
-  border-radius: 4px; cursor: pointer;
+.compose-tool {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--text-secondary); padding: 6px 9px;
+  border-radius: 4px; display: inline-flex; align-items: center;
+  line-height: 1;
 }
-.compose-format-toolbar i:hover { background: var(--hover); color: var(--text); }
+.compose-tool i { font-size: 16px; }
+.compose-tool:hover { background: var(--hover); color: var(--text); }
+.compose-tool:active { background: var(--active); }
 .compose-toolbar-sep {
   width: 1px; height: 18px; background: var(--border); margin: 0 4px;
+}
+/* Visible reply-separator (``<hr class="ldoc-reply-sep">``) between the
+   user's new text and the quoted original.  Purely decorative; stripped
+   before send. */
+.compose-editor-rich .ldoc-reply-sep {
+  border: none; border-top: 1px dashed var(--border);
+  margin: 12px 0;
 }
 
 .compose-editor {
@@ -294,8 +461,25 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
   padding: 16px; font-size: 14px; font-family: inherit;
   resize: none; outline: none; min-height: 300px;
   line-height: 1.6;
+  background: var(--surface); color: var(--text);
+  overflow-y: auto;
 }
 .compose-editor:focus { border-color: var(--primary); }
+/* Rich-text editor variant — a contenteditable div so replies +
+   forwards can carry HTML (quoted blocks, formatting, links).  The
+   placeholder lives in ``::before`` and disappears once content is
+   present. */
+.compose-editor-rich { white-space: normal; word-wrap: break-word; }
+.compose-editor-rich:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.compose-editor-rich blockquote {
+  border-left: 3px solid var(--border);
+  margin: 4px 0 4px 2px; padding-left: 12px; color: var(--text-secondary);
+}
+.compose-editor-rich a { color: var(--primary); }
 
 /* ══════════════════════════════════════════════════════════════
    CALENDAR
@@ -305,7 +489,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 /* ── Calendar sidebar ───────────────────────────────────────── */
 .cal-sidebar {
   width: var(--sidebar-w); min-width: var(--sidebar-w);
-  background: #fafafa; border-right: 1px solid var(--border);
+  background: var(--panel-bg); border-right: 1px solid var(--border);
   padding: 12px; overflow-y: auto;
 }
 
@@ -336,11 +520,11 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 }
 .cal-week { display: grid; grid-template-columns: repeat(7, 1fr); flex: 1; min-height: 0; }
 .cal-cell {
-  border-right: 1px solid #f0f0f0; border-bottom: 1px solid #f0f0f0;
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
   padding: 2px 4px; overflow: hidden; min-height: 80px;
 }
-.cal-cell.other { background: #fafafa; }
-.cal-cell.today { background: #f0f7ff; }
+.cal-cell.other { background: var(--panel-bg); }
+.cal-cell.today { background: var(--primary-light); }
 .cal-cell-header { margin-bottom: 2px; }
 .cal-day-num { font-size: 12px; color: var(--text-secondary); }
 .cal-day-num.today {
@@ -364,7 +548,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 
 /* ── View mode toggle ──────────────────────────────────────── */
 .cal-view-toggle {
-  display: flex; gap: 2px; background: #f0f0f0; border-radius: 6px; padding: 2px;
+  display: flex; gap: 2px; background: var(--panel-bg-2); border-radius: 6px; padding: 2px;
 }
 .cal-view-toggle .q-btn { border-radius: 4px; min-height: 28px; padding: 0 12px; }
 .cal-view-active { background: #fff !important; box-shadow: 0 1px 3px rgba(0,0,0,.1); color: var(--primary) !important; font-weight: 600; }
@@ -379,6 +563,39 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 .cal-event-free { background: #e8f5e9; border-left: 3px solid #4caf50; color: #388e3c; }
 .cal-event-free.all-day { background: #4caf50; color: #fff; border-left: none; }
 
+/* Dark-mode event palette — translucent fills over the dark grid with
+   legible lighter text.  "All-day" pills keep the saturated brand
+   colour so week-header banners still read at a glance. */
+:root[data-mail-theme="dark"] .cal-event-busy {
+  background: rgba(0, 120, 212, 0.18); border-left-color: #4fa5e8; color: #8cc8f5;
+}
+:root[data-mail-theme="dark"] .cal-event-busy.all-day {
+  background: #2b6cad; color: #f3f8fd;
+}
+:root[data-mail-theme="dark"] .cal-event-tentative {
+  background: repeating-linear-gradient(45deg,
+              rgba(0,120,212,0.22) 0, rgba(0,120,212,0.22) 4px,
+              transparent 4px, transparent 8px);
+  border-left-color: #4fa5e8; color: #8cc8f5;
+}
+:root[data-mail-theme="dark"] .cal-event-tentative.all-day {
+  background: repeating-linear-gradient(45deg,
+              #2b6cad 0, #2b6cad 4px, #4683bf 4px, #4683bf 8px);
+  color: #f3f8fd;
+}
+:root[data-mail-theme="dark"] .cal-event-oof {
+  background: rgba(122, 74, 217, 0.22); border-left-color: #b39ae0; color: #cdb8f0;
+}
+:root[data-mail-theme="dark"] .cal-event-oof.all-day {
+  background: #6a3fc2; color: #f6f2fd;
+}
+:root[data-mail-theme="dark"] .cal-event-free {
+  background: rgba(76, 175, 80, 0.2); border-left-color: #7ac988; color: #a8dcae;
+}
+:root[data-mail-theme="dark"] .cal-event-free.all-day {
+  background: #3d8f44; color: #f0f8f0;
+}
+
 /* ── Week view ─────────────────────────────────────────────── */
 .cal-week-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .cal-week-header {
@@ -386,16 +603,16 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 }
 .cal-week-header .cal-time-col { width: 60px; flex-shrink: 0; }
 .cal-week-header .cal-day-col {
-  flex: 1; text-align: center; padding: 6px 0; border-left: 1px solid #f0f0f0;
+  flex: 1; text-align: center; padding: 6px 0; border-left: 1px solid var(--border);
 }
-.cal-week-header .cal-day-col.today { background: #f0f7ff; }
+.cal-week-header .cal-day-col.today { background: var(--primary-light); }
 .cal-week-dow { font-size: 11px; font-weight: 600; color: var(--text-secondary); display: block; }
 
 .cal-week-allday-row {
   display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; min-height: 28px;
 }
 .cal-week-allday-row .cal-time-col { width: 60px; flex-shrink: 0; font-size: 10px; color: var(--text-muted); text-align: right; padding: 4px 8px 4px 0; }
-.cal-allday-cell { flex: 1; border-left: 1px solid #f0f0f0; padding: 2px 4px; display: flex; flex-wrap: wrap; gap: 2px; }
+.cal-allday-cell { flex: 1; border-left: 1px solid var(--border); padding: 2px 4px; display: flex; flex-wrap: wrap; gap: 2px; }
 
 .cal-time-grid { display: flex; flex: 1; overflow-y: auto; }
 .cal-time-col { width: 60px; flex-shrink: 0; }
@@ -403,8 +620,8 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
   height: 48px; font-size: 11px; color: var(--text-muted);
   text-align: right; padding-right: 8px; line-height: 48px;
 }
-.cal-day-col { flex: 1; border-left: 1px solid #f0f0f0; position: relative; }
-.cal-hour-line { height: 48px; border-bottom: 1px solid #f0f0f0; }
+.cal-day-col { flex: 1; border-left: 1px solid var(--border); position: relative; }
+.cal-hour-line { height: 48px; border-bottom: 1px solid var(--border); }
 .cal-time-event {
   position: absolute; left: 2px; right: 2px; border-radius: 3px;
   padding: 2px 6px; font-size: 11px; overflow: hidden; cursor: pointer;
@@ -431,14 +648,22 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 }
 
 /* ── Calendar event detail dialog ──────────────────────────── */
-.event-dialog { min-width: 420px; max-width: 520px; border-radius: 8px; }
+/* Event detail dialog — ``q-card`` has its own opinions about
+   background/color that don't flip in dark mode; force our theme
+   tokens so every line reads. */
+.event-dialog {
+  min-width: 420px; max-width: 520px; border-radius: 8px;
+  background: var(--surface) !important; color: var(--text) !important;
+}
+.event-dialog .q-card__section { color: var(--text); }
 .event-dialog-header {
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: 12px;
 }
-.event-dialog-title { font-size: 18px; font-weight: 600; line-height: 1.3; }
+.event-dialog-title { font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--text); }
 .event-dialog-close { flex-shrink: 0; }
-.event-dialog-body { padding-top: 16px; }
+.event-dialog-body { padding-top: 16px; color: var(--text); }
+.event-dialog-body .text-grey-6 { color: var(--text-secondary) !important; }
 .event-detail-row {
   display: flex; gap: 12px; margin-bottom: 16px; align-items: flex-start;
 }
@@ -505,7 +730,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
    ══════════════════════════════════════════════════════════════ */
 .context-menu {
   position: fixed; z-index: 9999;
-  background: #fff; border: 1px solid var(--border);
+  background: var(--surface); border: 1px solid var(--border);
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
   min-width: 180px; padding: 4px 0;
 }
@@ -524,13 +749,21 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 /* ══════════════════════════════════════════════════════════════
    SETTINGS PANEL
    ══════════════════════════════════════════════════════════════ */
-.settings-panel { width: 320px; height: 100vh; border-radius: 0; }
+/* Right-hand settings panel — forces our theme tokens onto Quasar's
+   q-card so the panel flips cleanly in dark mode.  Same pattern as
+   ``.event-dialog`` above. */
+.settings-panel {
+  width: 320px; height: 100vh; border-radius: 0;
+  background: var(--surface) !important; color: var(--text) !important;
+}
+.settings-panel .q-card__section { color: var(--text); }
 .settings-header {
   display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--border);
 }
-.settings-title { font-size: 16px; font-weight: 600; display: flex; align-items: center; }
+.settings-title { font-size: 16px; font-weight: 600; display: flex; align-items: center; color: var(--text); }
 .settings-title i { font-size: 20px; }
-.settings-body { padding-top: 8px; }
+.settings-body { padding-top: 8px; color: var(--text); }
 .settings-group { margin-bottom: 24px; }
 .settings-group-title {
   font-size: 11px; font-weight: 600; color: var(--text-muted);
@@ -540,7 +773,31 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 0; font-size: 13px;
 }
-.settings-value { color: var(--text-secondary); }
+.settings-value { color: var(--text-secondary); text-transform: capitalize; }
+/* Segmented control — auto / light / dark etc. */
+.settings-segment {
+  display: inline-flex; gap: 2px;
+  background: var(--panel-bg-2); border-radius: 6px; padding: 2px;
+}
+.settings-segment button {
+  border: none; background: transparent; cursor: pointer;
+  font: inherit; color: var(--text-secondary);
+  padding: 4px 10px; border-radius: 4px; font-size: 12px;
+}
+.settings-segment button.on {
+  background: var(--surface); color: var(--primary); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1);
+}
+.settings-segment button:hover:not(.on) { color: var(--text); }
+
+/* Trust list rows in the settings panel. */
+.settings-empty { font-size: 12px; color: var(--text-muted); padding: 4px 0; }
+.settings-trust-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; font-size: 13px; color: var(--text);
+}
+.settings-trust-row i { font-size: 14px; color: var(--text-secondary); }
+.settings-trust-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-badge {
   background: #e8f5e9; color: #2e7d32; font-size: 11px; font-weight: 600;
   padding: 2px 10px; border-radius: 10px;
@@ -569,7 +826,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 .chat-list { flex: 1; overflow-y: auto; }
 .chat-list-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #f0f0f0;
+  padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border);
 }
 .chat-list-item:hover { background: var(--hover); }
 .chat-list-item.active { background: var(--primary-light); }
@@ -630,7 +887,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 /* ── Chat reactions ────────────────────────────────────────── */
 .chat-reactions { display: flex; gap: 4px; margin-top: 4px; }
 .chat-reaction {
-  background: #f0f0f0; border-radius: 12px; padding: 2px 8px;
+  background: var(--panel-bg-2); border-radius: 12px; padding: 2px 8px;
   font-size: 12px; cursor: pointer;
 }
 .chat-reaction:hover { background: #e0e0e0; }
@@ -639,12 +896,12 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 .chat-input-bar {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 16px; border-top: 1px solid var(--border);
-  background: #fafafa;
+  background: var(--panel-bg);
 }
 .chat-input {
   flex: 1; border: 1px solid var(--border); border-radius: 20px;
   padding: 8px 16px; font-size: 13px; outline: none;
-  background: #fff; color: var(--text); cursor: text;
+  background: var(--surface); color: var(--text); cursor: text;
 }
 .chat-input:focus { border-color: var(--primary); }
 
@@ -657,7 +914,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 .teams-sidebar {
   width: 280px; min-width: 240px;
   border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; background: #fafafa;
+  display: flex; flex-direction: column; background: var(--panel-bg);
 }
 .teams-sidebar-header {
   padding: 14px 16px; border-bottom: 1px solid var(--border);
@@ -705,7 +962,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 .team-post-time { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
 .team-post-body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; padding-left: 38px; }
 .team-post-reactions { display: flex; gap: 4px; margin-top: 8px; padding-left: 38px; }
-.team-reaction { background: #f0f0f0; border-radius: 12px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.team-reaction { background: var(--panel-bg-2); border-radius: 12px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
 .team-reaction:hover { background: #e0e0e0; }
 .team-post-actions { padding-left: 38px; margin-top: 6px; }
 .team-reply-link {
@@ -718,7 +975,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 /* ── Teams input bar ───────────────────────────────────────── */
 .teams-input-bar {
   padding: 12px 16px; border-top: 1px solid var(--border);
-  background: #fafafa;
+  background: var(--panel-bg);
 }
 .teams-post-btn { border-radius: 20px !important; }
 
@@ -730,7 +987,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 /* ── Files sidebar ─────────────────────────────────────────── */
 .files-sidebar {
   width: var(--sidebar-w); min-width: var(--sidebar-w);
-  background: #fafafa; border-right: 1px solid var(--border);
+  background: var(--panel-bg); border-right: 1px solid var(--border);
   padding: 0; overflow-y: auto;
 }
 .files-sidebar-header {
@@ -756,7 +1013,7 @@ a, button, .q-btn, [role="button"], .msg-row, .folder-sidebar .q-item,
 /* ── Files table ───────────────────────────────────────────── */
 .files-table { width: 100%; border-collapse: collapse; }
 .files-table th { text-align: left; font-weight: 600; font-size: 12px; color: var(--text-secondary); padding: 8px 12px; border-bottom: 1px solid var(--border); }
-.files-table td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+.files-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .files-table tr:hover { background: var(--hover); cursor: pointer; }
 .files-table thead tr:hover { background: transparent; cursor: default; }
 

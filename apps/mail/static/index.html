@@ -12,18 +12,10 @@
 <body>
   <div id="q-app">
 
-    <!-- ─── Login ─────────────────────────────────────────── -->
-    <div v-if="!authenticated" class="login-screen">
-      <div class="login-card">
-        <i class="ph ph-microsoft-outlook-logo login-icon"></i>
-        <h2>office-connect</h2>
-        <p class="text-grey-6">Sign in with your Microsoft 365 account</p>
-        <q-btn color="primary" label="Sign in" icon-right="login" href="login" no-caps size="lg" class="q-mt-md"></q-btn>
-      </div>
-    </div>
-
-    <!-- ─── Main app ──────────────────────────────────────── -->
-    <q-layout v-if="authenticated" view="hHh LpR fFf" class="app-layout">
+    <!-- Main app chrome renders immediately (empty skeleton). On auth
+         failure the app redirects to ``config.loginUrl`` — never shows
+         an inline login card that would flash during the auth probe. -->
+    <q-layout view="hHh LpR fFf" class="app-layout">
 
       <!-- ─── Left icon rail ───────────────────────────────── -->
       <div class="nav-rail">
@@ -67,34 +59,47 @@
         <!-- ══════════════════════════════════════════════════ -->
         <!-- MAIL VIEW                                         -->
         <!-- ══════════════════════════════════════════════════ -->
-        <div v-if="view === 'mail' && !composeMode" class="mail-layout">
+        <div v-if="view === 'mail' && !composeMode" class="mail-layout"
+             :style="{ '--sidebar-w': folderSidebarWidth + 'px', '--list-w': messageListWidth + 'px' }">
 
           <!-- Folder sidebar -->
           <div class="folder-sidebar">
             <q-btn color="primary" no-caps class="new-mail-btn q-mb-md" @click="startCompose()">
               <i class="ph ph-pencil-simple q-mr-sm"></i> New Mail
             </q-btn>
-            <q-list dense>
-              <q-item v-for="f in folders" :key="f.id" clickable v-ripple dense
-                      :active="selectedFolder === f.id" active-class="folder-active"
-                      @click="selectFolder(f.id)">
-                <q-item-section avatar class="folder-icon-col">
-                  <i :class="folderIcon(f.name)"></i>
-                </q-item-section>
-                <q-item-section>
-                  <q-item-label class="folder-label">{{ f.name }}</q-item-label>
-                </q-item-section>
-                <q-item-section side v-if="f.unread">
-                  <span class="folder-badge">{{ f.unread }}</span>
-                </q-item-section>
-              </q-item>
-            </q-list>
+            <div class="folder-tree">
+              <div v-for="node in folderTree" :key="node.id"
+                   class="folder-node"
+                   :style="{ paddingLeft: (node.depth * 14) + 'px' }">
+                <div class="folder-row"
+                     :class="{ 'folder-active': selectedFolder === node.id }"
+                     @click="selectFolder(node.id)">
+                  <span class="folder-twist"
+                        v-if="node.hasChildren"
+                        @click.stop="toggleFolder(node.id)">
+                    <i class="ph" :class="expandedFolders[node.id] === false ? 'ph-caret-right' : 'ph-caret-down'"></i>
+                  </span>
+                  <span v-else class="folder-twist folder-twist-pad"></span>
+                  <i class="folder-icon" :class="folderIcon(node.name)"></i>
+                  <span class="folder-label">{{ node.name }}</span>
+                  <span v-if="node.unread" class="folder-badge">{{ node.unread }}</span>
+                </div>
+              </div>
+            </div>
           </div>
+
+          <!-- Splitter: folder sidebar | message list -->
+          <div class="mail-splitter" @mousedown="startSplitDrag($event, 'sidebar')"></div>
 
           <!-- Message list -->
           <div class="message-list-panel">
             <div class="ml-header">
               <span class="ml-title">{{ currentFolderName }}</span>
+              <span v-if="!isOnline || wsState === 'reconnecting' || wsState === 'closed'"
+                    class="ml-offline-pill"
+                    title="Network unavailable — showing cached mail">
+                <i class="ph ph-wifi-slash q-mr-xs"></i> Offline
+              </span>
               <div class="ml-search">
                 <i class="ph ph-magnifying-glass"></i>
                 <input v-model="mailSearch" placeholder="Search mail" @input="filterMessages">
@@ -107,7 +112,11 @@
               <template v-for="group in groupedMessages" :key="group.label">
                 <div class="msg-group-header">{{ group.label }}</div>
                 <div v-for="m in group.messages" :key="m.id"
-                     class="msg-row" :class="{active: selectedMessage && selectedMessage.email_id === m.id, unread: !m.is_read}"
+                     class="msg-row"
+                     :class="[
+                       { active: selectedMessage && selectedMessage.email_id === m.id, unread: !m.is_read },
+                       ...((rowExt(m).classes) || [])
+                     ]"
                      @click="openMessage(m.id)"
                      @contextmenu.prevent="showContextMenu($event, 'mail', m)">
                   <img v-if="senderPhoto(m.from_email)" :src="senderPhoto(m.from_email)" class="msg-avatar-img">
@@ -123,6 +132,20 @@
                     <div class="msg-preview">{{ m.preview }}</div>
                   </div>
                   <div class="msg-indicators">
+                    <i v-for="ind in ((rowExt(m).indicators) || [])"
+                       :key="ind.icon || ind.title"
+                       :class="ind.icon"
+                       :title="ind.title || ''"
+                       :style="ind.color ? { color: ind.color } : null"></i>
+                    <!-- Aggregated reaction count — folder_id-indexed
+                         reactions are populated once the mail is opened;
+                         we surface the top emoji here so browsing the
+                         index hints at the emotion without a round trip. -->
+                    <span v-if="reactionsByMsgId[m.id] && reactionsByMsgId[m.id].length"
+                          class="msg-react-chip"
+                          :title="reactionsByMsgId[m.id].length + ' reaction(s)'">
+                      {{ reactionEmoji(reactionsByMsgId[m.id][0].reactionType) }}
+                    </span>
                     <i v-if="m.has_attachments" class="ph ph-paperclip"></i>
                     <i v-if="m.importance === 'high'" class="ph ph-warning text-red"></i>
                   </div>
@@ -135,19 +158,29 @@
             </div>
           </div>
 
+          <!-- Splitter: message list | reading pane -->
+          <div class="mail-splitter" @mousedown="startSplitDrag($event, 'list')"></div>
+
           <!-- Reading pane -->
           <div class="reading-pane">
             <div v-if="selectedMessage" class="rp-content">
-              <div class="rp-toolbar">
-                <q-btn flat dense no-caps @click="startReply(false)" class="rp-action">
-                  <i class="ph ph-arrow-bend-up-left q-mr-xs"></i> Reply
-                </q-btn>
-                <q-btn flat dense no-caps @click="startReply(true)" class="rp-action">
-                  <i class="ph ph-arrow-bend-double-up-left q-mr-xs"></i> Reply All
-                </q-btn>
-                <q-btn flat dense no-caps @click="startForward()" class="rp-action">
-                  <i class="ph ph-arrow-bend-up-right q-mr-xs"></i> Forward
-                </q-btn>
+              <!-- Title row — subject on the left, action icons on the right (Outlook-style). -->
+              <div class="rp-title-row">
+                <div class="rp-subject">{{ selectedMessage.subject }}</div>
+                <div class="rp-title-actions">
+                  <q-btn flat dense round size="sm" @click="startReply(false)" class="rp-title-btn">
+                    <i class="ph ph-arrow-bend-up-left"></i>
+                    <q-tooltip>Reply</q-tooltip>
+                  </q-btn>
+                  <q-btn flat dense round size="sm" @click="startReply(true)" class="rp-title-btn">
+                    <i class="ph ph-arrow-bend-double-up-left"></i>
+                    <q-tooltip>Reply All</q-tooltip>
+                  </q-btn>
+                  <q-btn flat dense round size="sm" @click="startForward()" class="rp-title-btn">
+                    <i class="ph ph-arrow-bend-up-right"></i>
+                    <q-tooltip>Forward</q-tooltip>
+                  </q-btn>
+                </div>
               </div>
               <div class="rp-header">
                 <img v-if="senderPhoto(selectedMessage.from_email)" :src="senderPhoto(selectedMessage.from_email)" class="rp-avatar-img">
@@ -155,7 +188,6 @@
                   {{ initials(selectedMessage.from_name || selectedMessage.from_email) }}
                 </div>
                 <div class="rp-header-text">
-                  <div class="rp-subject">{{ selectedMessage.subject }}</div>
                   <div class="rp-from">
                     <strong>{{ selectedMessage.from_name }}</strong>
                     <span class="text-grey-6">&lt;{{ selectedMessage.from_email }}&gt;</span>
@@ -163,14 +195,68 @@
                   <div class="rp-date text-grey-6">{{ formatFullDate(selectedMessage.local_timestamp) }}</div>
                 </div>
               </div>
+
+              <!-- Reaction bar — shows the emoji pills already set on
+                   this mail; the +ʀ button opens the picker for adding
+                   or switching.  Click a pill to toggle your own. -->
+              <div class="rp-reactions">
+                <span v-for="r in currentReactions" :key="r.type"
+                      class="rp-react-chip" :class="{ mine: r.mine }"
+                      :title="r.users.join(', ')"
+                      @click="toggleReaction(r.type)">
+                  {{ reactionEmoji(r.type) }} <span class="rp-react-count">{{ r.count }}</span>
+                </span>
+                <q-btn flat dense round size="sm" class="rp-react-add"
+                       @click.stop="showReactionPicker = !showReactionPicker">
+                  <i class="ph ph-smiley-plus"></i>
+                  <q-tooltip>Add reaction</q-tooltip>
+                </q-btn>
+                <div v-if="showReactionPicker" class="rp-react-picker" @click.stop>
+                  <span v-for="t in REACTION_PALETTE" :key="t"
+                        class="rp-react-option"
+                        @click="toggleReaction(t)">
+                    {{ reactionEmoji(t) }}
+                  </span>
+                </div>
+              </div>
               <q-separator class="q-my-sm"></q-separator>
-              <iframe :srcdoc="selectedMessage.body || ''" sandbox="allow-same-origin" class="rp-body-frame"></iframe>
-              <!-- Attachments bar -->
+              <div v-if="externalImagesBlocked > 0" class="rp-external-banner">
+                <i class="ph ph-shield-check"></i>
+                <span>To protect your privacy, {{ externalImagesBlocked }} external image{{ externalImagesBlocked === 1 ? '' : 's' }} {{ externalImagesBlocked === 1 ? 'was' : 'were' }} not loaded.</span>
+                <q-btn flat dense no-caps size="sm" @click="showExternalImagesForCurrent" class="rp-external-btn">
+                  Download external images
+                </q-btn>
+                <q-btn flat dense no-caps size="sm" class="rp-external-btn">
+                  Trust<i class="ph ph-caret-down q-ml-xs"></i>
+                  <q-menu anchor="bottom right" self="top right">
+                    <q-list dense style="min-width: 220px">
+                      <q-item v-if="currentSenderEmail" clickable v-close-popup @click="trustCurrentSender">
+                        <q-item-section>
+                          <q-item-label>Trust sender</q-item-label>
+                          <q-item-label caption>{{ currentSenderEmail }}</q-item-label>
+                        </q-item-section>
+                      </q-item>
+                      <q-item v-if="currentSenderDomain" clickable v-close-popup @click="trustCurrentDomain">
+                        <q-item-section>
+                          <q-item-label>Trust entire domain</q-item-label>
+                          <q-item-label caption>{{ currentSenderDomain }}</q-item-label>
+                        </q-item-section>
+                      </q-item>
+                    </q-list>
+                  </q-menu>
+                </q-btn>
+              </div>
+              <iframe :srcdoc="displayBody" sandbox="allow-same-origin" class="rp-body-frame"></iframe>
+              <!-- Host extension slot: hooks.renderMailViewExtras gets injected here -->
+              <div class="rp-extras" ref="mailExtrasSlot"></div>
+              <!-- Attachments bar — click serves from IndexedDB when warm,
+                   otherwise falls through to HTTP download. -->
               <div v-if="selectedMessage.attachments && selectedMessage.attachments.length" class="rp-attachments">
                 <div class="rp-att-label"><i class="ph ph-paperclip"></i> Attachments</div>
                 <div class="rp-att-list">
                   <a v-for="att in selectedMessage.attachments" :key="att.name" class="rp-att-item"
                      :href="'api/mail/messages/' + encodeURIComponent(selectedMessage.email_id) + '/attachments/' + encodeURIComponent(att.name)"
+                     @click="openAttachment($event, att)"
                      target="_blank" download>
                     <i class="ph ph-file"></i>
                     <span class="rp-att-name">{{ att.name }}</span>
@@ -257,18 +343,27 @@
               <label>Subject</label>
               <input v-model="compose.subject">
             </div>
-            <div class="compose-format-toolbar">
-              <i class="ph ph-text-b" title="Bold"></i>
-              <i class="ph ph-text-italic" title="Italic"></i>
-              <i class="ph ph-text-underline" title="Underline"></i>
+            <div class="compose-format-toolbar" @mousedown.prevent>
+              <button type="button" class="compose-tool" @click="execFormat('bold')" title="Bold (Ctrl+B)"><i class="ph ph-text-b"></i></button>
+              <button type="button" class="compose-tool" @click="execFormat('italic')" title="Italic (Ctrl+I)"><i class="ph ph-text-italic"></i></button>
+              <button type="button" class="compose-tool" @click="execFormat('underline')" title="Underline (Ctrl+U)"><i class="ph ph-text-underline"></i></button>
               <span class="compose-toolbar-sep"></span>
-              <i class="ph ph-list-bullets" title="Bulleted list"></i>
-              <i class="ph ph-list-numbers" title="Numbered list"></i>
+              <button type="button" class="compose-tool" @click="execFormat('insertUnorderedList')" title="Bulleted list"><i class="ph ph-list-bullets"></i></button>
+              <button type="button" class="compose-tool" @click="execFormat('insertOrderedList')" title="Numbered list"><i class="ph ph-list-numbers"></i></button>
               <span class="compose-toolbar-sep"></span>
-              <i class="ph ph-paperclip" title="Attach file"></i>
-              <i class="ph ph-link" title="Insert link"></i>
+              <button type="button" class="compose-tool" @click="attachFile" title="Attach file"><i class="ph ph-paperclip"></i></button>
+              <button type="button" class="compose-tool" @click="insertLink" title="Insert link"><i class="ph ph-link"></i></button>
             </div>
-            <textarea v-model="compose.body" class="compose-editor" placeholder="Write your message..."></textarea>
+            <!-- Rich compose editor — accepts HTML so quoted replies /
+                 forwarded messages keep their formatting.  Body is
+                 synced back to ``compose.body`` on every ``input``. -->
+            <div class="compose-editor compose-editor-rich"
+                 contenteditable="true"
+                 spellcheck="true"
+                 ref="composeEditor"
+                 data-placeholder="Write your message..."
+                 @input="onComposeEditorInput"
+                 @keydown="onComposeKeyDown"></div>
           </div>
         </div>
 
@@ -339,7 +434,8 @@
                       <span v-if="!ev.is_all_day" class="cal-event-time">{{ formatTime(ev.start_time) }}</span>
                       {{ ev.subject }}
                     </div>
-                    <div v-if="day.events.length > 3" class="cal-more">
+                    <div v-if="day.events.length > 3" class="cal-more"
+                         @click.stop="openDayFromCell(day.date)">
                       +{{ day.events.length - 3 }} more
                     </div>
                   </div>
@@ -870,15 +966,52 @@
             <div class="settings-group">
               <div class="settings-group-title">Appearance</div>
               <div class="settings-row">
-                <span>Theme</span>
-                <span class="settings-value">Light</span>
+                <span>App theme</span>
+                <span class="settings-value">{{ theme }}</span>
+              </div>
+              <div class="settings-row">
+                <span>Mail body</span>
+                <div class="settings-segment">
+                  <button type="button"
+                          :class="{ on: bodyTheme === 'auto' }"
+                          @click="setBodyTheme('auto')">Auto</button>
+                  <button type="button"
+                          :class="{ on: bodyTheme === 'light' }"
+                          @click="setBodyTheme('light')">Light</button>
+                  <button type="button"
+                          :class="{ on: bodyTheme === 'dark' }"
+                          @click="setBodyTheme('dark')">Dark</button>
+                </div>
               </div>
             </div>
             <div class="settings-group">
-              <div class="settings-group-title">Status</div>
+              <div class="settings-group-title">Notifications</div>
               <div class="settings-row">
-                <span>Mode</span>
-                <span class="settings-badge">Mock Mode</span>
+                <span>New mail sound</span>
+                <q-toggle v-model="soundEnabled" @update:model-value="toggleSound" dense></q-toggle>
+              </div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-group-title">Cache</div>
+              <div class="settings-row">
+                <span>Avatar photos</span>
+                <q-btn flat dense size="sm" label="Clear" @click="clearAvatarCache"></q-btn>
+              </div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-group-title">Trusted senders</div>
+              <div v-if="!userTrust.senders.length && !userTrust.domains.length" class="settings-empty">
+                None yet — use the banner on any mail to trust its sender or domain.
+              </div>
+              <div v-for="e in userTrust.senders" :key="'s-'+e" class="settings-trust-row">
+                <i class="ph ph-user"></i>
+                <span class="settings-trust-value">{{ e }}</span>
+                <q-btn flat dense size="sm" icon-right="close" @click="forgetTrust('sender', e)"></q-btn>
+              </div>
+              <div v-for="d in userTrust.domains" :key="'d-'+d" class="settings-trust-row">
+                <i class="ph ph-globe"></i>
+                <span class="settings-trust-value">@{{ d }}</span>
+                <q-btn flat dense size="sm" icon-right="close" @click="forgetTrust('domain', d)"></q-btn>
               </div>
             </div>
             <div class="settings-group">
@@ -886,12 +1019,6 @@
               <div class="settings-row">
                 <span>Version</span>
                 <span class="settings-value">{{ APP_VERSION }}</span>
-              </div>
-              <div class="settings-row">
-                <span>Source</span>
-                <a href="https://github.com/office-connect" target="_blank" class="settings-link">
-                  <i class="ph ph-github-logo q-mr-xs"></i> GitHub
-                </a>
               </div>
             </div>
           </q-card-section>
@@ -901,8 +1028,13 @@
     </q-layout>
   </div>
 
+<!-- Ping sound generated via Web Audio API in app.js — no file needed -->
+
 <script src="vendor/vue.global.prod.js"></script>
 <script src="vendor/quasar.umd.prod.js"></script>
+<script src="mail_hooks.js"></script>
+<script src="mail_client.js"></script>
+<script src="mail_cache.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

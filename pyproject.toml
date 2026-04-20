@@ -24,16 +24,20 @@ python = ">=3.14,<4"
 pydantic = "*"
 llming-models = ">=0.1.0"
 
-# Optional export dependencies
+# Optional export + PDF dependencies.
+# pymupdf/fitz is FORBIDDEN (AGPL) — use pypdfium2 (Apache-2.0) + pdfplumber (MIT).
 python-docx = {version = ">=1.2", optional = true}
 python-pptx = {version = ">=1.0", optional = true}
 openpyxl = {version = ">=3.1", optional = true}
+pypdfium2 = {version = ">=4.0", optional = true}
+pdfplumber = {version = ">=0.11", optional = true}
 
 [tool.poetry.extras]
 word = ["python-docx"]
 pptx = ["python-pptx"]
 excel = ["openpyxl"]
-all = ["python-docx", "python-pptx", "openpyxl"]
+pdf = ["pypdfium2", "pdfplumber"]
+all = ["python-docx", "python-pptx", "openpyxl", "pypdfium2", "pdfplumber"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

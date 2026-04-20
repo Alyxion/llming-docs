@@ -23,7 +23,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 import uvicorn
-from fastapi import FastAPI, Request, Response, HTTPException, Query
+from fastapi import FastAPI, Request, Response, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -58,8 +58,10 @@ if _office_connect_path.is_dir():
     sys.path.insert(0, str(_office_connect_path))
 
 from office_con.msgraph.ms_graph_handler import MsGraphInstance       # noqa: E402
+from office_con.msgraph.mail_handler import compute_folder_signature # noqa: E402
 from office_con.mcp_server import export_keyfile                     # noqa: E402
 from office_con.auth.office_user_instance import OfficeUserInstance   # noqa: E402
+from push import MailPushManager                                     # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Config
@@ -89,8 +91,13 @@ app = FastAPI(docs_url=None, redoc_url=None)
 # CSRF token per process (single-user dev tool)
 CSRF_TOKEN = secrets.token_hex(16)
 
-# In-memory session — single-user sample app
-_graph: Optional[MsGraphInstance] = None
+SESSION_COOKIE = "mail_session"
+
+# Session store — maps session ID → MsGraphInstance
+_sessions: dict[str, MsGraphInstance] = {}
+
+# Push manager — per-session polling + WS push
+_push = MailPushManager()
 
 # Mock data store for chat, teams, files (populated in _init_mock)
 _mock_data: dict = {}
@@ -137,14 +144,41 @@ def _init_mock() -> MsGraphInstance:
     return graph
 
 
+MOCK_SESSION_ID = "mock-session"
+
 if MOCK_MODE:
-    _graph = _init_mock()
+    _sessions[MOCK_SESSION_ID] = _init_mock()
 
 
-def _get_graph() -> MsGraphInstance:
-    if _graph is None:
+def _mail_to_search_row(m) -> dict:
+    """Convert an OfficeMail to the row shape the Vue list/search views expect."""
+    return {
+        "id": m.email_id,
+        "from_name": m.from_name or "",
+        "from_email": m.from_email or "",
+        "subject": m.subject or "(no subject)",
+        "preview": m.body_preview or "",
+        "received": m.local_timestamp or "",
+        "is_read": m.is_read,
+        "has_attachments": m.has_attachments,
+        "importance": m.importance or "normal",
+        "categories": m.categories,
+        # Index queries don't fetch attachment details, so scanning is
+        # indeterminate here.  The push system (mail.scan_done) handles
+        # scan-state transitions for the client.
+        "scanning": False,
+    }
+
+
+def _get_session_id(request: Request) -> str | None:
+    return request.cookies.get(SESSION_COOKIE)
+
+
+def _get_graph(request: Request) -> MsGraphInstance:
+    sid = _get_session_id(request)
+    if sid is None or sid not in _sessions:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return _graph
+    return _sessions[sid]
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +227,6 @@ async def index():
 @app.get("/auth")
 async def oauth_callback(code: str = Query(...)):
     """OAuth callback — Microsoft redirects here with ?code=."""
-    global _graph
     graph = MsGraphInstance(
         scopes=SCOPES,
         client_id=os.environ.get("O365_CLIENT_ID"),
@@ -204,7 +237,8 @@ async def oauth_callback(code: str = Query(...)):
     result = await graph.acquire_token_async(code, REDIRECT_URI)
     if isinstance(result, HTMLResponse) and result.status_code >= 400:
         return result
-    _graph = graph
+    session_id = secrets.token_urlsafe(32)
+    _sessions[session_id] = graph
     # Persist token for automated tests
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     export_keyfile(
@@ -218,11 +252,40 @@ async def oauth_callback(code: str = Query(...)):
         email=graph.email,
     )
     log.info("Token saved to %s", TOKEN_FILE)
-    return RedirectResponse(f"{BASE_URL}/")
+    response = RedirectResponse(f"{BASE_URL}/")
+    response.set_cookie(
+        SESSION_COOKIE, session_id,
+        httponly=True, secure=True, samesite="lax", max_age=7 * 86400,
+    )
+    return response
 
 
 # Serve static assets (vendor/, app.js, app.css)
 app.mount("/vendor", StaticFiles(directory=str(STATIC_DIR / "vendor")), name="vendor")
+
+
+@app.get("/mail_client.js")
+async def serve_mail_client_js():
+    return Response(
+        (STATIC_DIR / "mail_client.js").read_text(),
+        media_type="application/javascript",
+    )
+
+
+@app.get("/mail_hooks.js")
+async def serve_mail_hooks_js():
+    return Response(
+        (STATIC_DIR / "mail_hooks.js").read_text(),
+        media_type="application/javascript",
+    )
+
+
+@app.get("/mail_cache.js")
+async def serve_mail_cache_js():
+    return Response(
+        (STATIC_DIR / "mail_cache.js").read_text(),
+        media_type="application/javascript",
+    )
 
 
 @app.get("/app.js")
@@ -262,128 +325,55 @@ async def login():
 
 
 @app.get("/auth-status")
-async def auth_status():
-    if _graph is None:
+async def auth_status(request: Request):
+    sid = _get_session_id(request)
+    graph = _sessions.get(sid) if sid else None
+    if graph is None:
         return {"authenticated": False}
-    return {"authenticated": True, "email": _graph.email}
+    return {"authenticated": True, "email": graph.email}
 
 
 # ---------------------------------------------------------------------------
-# Mail API
+# Mail HTTP API — attachment binary downloads ONLY.
+#
+# All other mail reads (folder list, message index, body + metadata,
+# search, send, move, delete, drafts, mark_read) travel through the
+# ``/ws/mail`` WebSocket.  Binary attachments stay on HTTP so the
+# browser can drive "Save As" via ``Content-Disposition`` and use
+# Cache-Control + Range requests without blocking the WS JSON channel.
+# See docs/mail-architecture.md.
 # ---------------------------------------------------------------------------
 
-@app.get("/api/mail/folders")
-async def list_mail_folders():
-    """List mail folders via Graph API."""
-    graph = _get_graph()
-    token = await graph.get_access_token_async()
-    if not token:
-        raise HTTPException(401, "Token expired")
-    resp = await graph.run_async(
-        url=f"{graph.msg_endpoint}me/mailFolders?$top=50",
-        token=token,
-    )
-    if resp is None or resp.status_code != 200:
-        raise HTTPException(502, "Failed to fetch folders")
-    folders = resp.json().get("value", [])
-    return [
-        {
-            "id": f["id"],
-            "name": f.get("displayName", ""),
-            "unread": f.get("unreadItemCount", 0),
-            "total": f.get("totalItemCount", 0),
-        }
-        for f in folders
-    ]
 
-
-@app.get("/api/mail/messages")
-async def list_messages(
-    folder_id: str = Query("inbox"),
-    limit: int = Query(20, ge=1, le=100),
-    skip: int = Query(0, ge=0),
-):
-    """List messages in a folder."""
-    graph = _get_graph()
-    token = await graph.get_access_token_async()
-    if not token:
-        raise HTTPException(401, "Token expired")
-    fields = "id,from,subject,bodyPreview,receivedDateTime,isRead,hasAttachments,importance"
-    url = (
-        f"{graph.msg_endpoint}me/mailFolders/{folder_id}/messages"
-        f"?$select={fields}&$top={limit}&$skip={skip}"
-        f"&$orderby=receivedDateTime desc&$count=true"
-    )
-    resp = await graph.run_async(url=url, token=token)
-    if resp is None or resp.status_code != 200:
-        raise HTTPException(502, "Failed to fetch messages")
-    data = resp.json()
-    messages = []
-    for m in data.get("value", []):
-        from_addr = m.get("from", {}).get("emailAddress", {})
-        messages.append({
-            "id": m["id"],
-            "from_name": from_addr.get("name", ""),
-            "from_email": from_addr.get("address", ""),
-            "subject": m.get("subject", "(no subject)"),
-            "preview": m.get("bodyPreview", ""),
-            "received": m.get("receivedDateTime", ""),
-            "is_read": m.get("isRead", False),
-            "has_attachments": m.get("hasAttachments", False),
-            "importance": m.get("importance", "normal"),
-        })
-    return {"messages": messages, "total": data.get("@odata.count", len(messages))}
-
-
-@app.get("/api/mail/messages/{message_id}")
-async def get_message(message_id: str):
-    """Get a single message with body, CID images resolved to data URIs."""
-    graph = _get_graph()
-    mail = graph.get_mail()
-    result = await mail.get_mail_async(email_id=message_id)
-    if result is None:
-        raise HTTPException(404, "Message not found")
-    data = result.model_dump(exclude={"zip_data"})
-    # Resolve cid: references to base64 data URIs
-    if result.body and result.attachments:
-        import base64
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(result.body, "html.parser")
-        cid_map = {}
-        name_map = {}
-        for att in result.attachments:
-            if att.content_bytes and att.content_type and att.content_type.startswith("image/"):
-                if att.content_id:
-                    cid_map[f"cid:{att.content_id}"] = att
-                    cid_map[f"cid:{att.content_id.split('@')[0]}"] = att
-                name_map[att.name] = att
-        changed = False
-        for img in soup.find_all("img"):
-            src = img.get("src", "")
-            att = cid_map.get(src) or name_map.get(src.rsplit("/", 1)[-1])
-            if att and att.content_bytes:
-                b64 = base64.b64encode(att.content_bytes).decode()
-                img["src"] = f"data:{att.content_type};base64,{b64}"
-                changed = True
-        if changed:
-            data["body"] = str(soup)
-    # Include attachment metadata without binary content
-    if result.attachments:
-        data["attachments"] = [
-            {"name": a.name, "content_type": a.content_type,
-             "is_embedded": a.is_embedded,
-             "size": len(a.content_bytes) if a.content_bytes else 0}
-            for a in result.attachments if not a.is_embedded
-        ]
-    else:
-        data["attachments"] = []
-    return data
+def _inline_cid_images(body: str, attachments) -> str:
+    """Replace ``cid:`` image references in the body with data URIs."""
+    if not body or not attachments:
+        return body
+    import base64
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(body, "html.parser")
+    cid_map, name_map = {}, {}
+    for att in attachments:
+        if att.content_bytes and att.content_type and att.content_type.startswith("image/"):
+            if att.content_id:
+                cid_map[f"cid:{att.content_id}"] = att
+                cid_map[f"cid:{att.content_id.split('@')[0]}"] = att
+            name_map[att.name] = att
+    changed = False
+    for img in soup.find_all("img"):
+        src = img.get("src", "")
+        att = cid_map.get(src) or name_map.get(src.rsplit("/", 1)[-1])
+        if att and att.content_bytes:
+            b64 = base64.b64encode(att.content_bytes).decode()
+            img["src"] = f"data:{att.content_type};base64,{b64}"
+            changed = True
+    return str(soup) if changed else body
 
 
 @app.get("/api/mail/messages/{message_id}/attachments/{attachment_name}")
-async def download_attachment(message_id: str, attachment_name: str):
+async def download_attachment(request: Request, message_id: str, attachment_name: str):
     """Download an attachment by message ID and filename."""
-    graph = _get_graph()
+    graph = _get_graph(request)
     mail = graph.get_mail()
     result = await mail.get_mail_async(email_id=message_id)
     if result is None:
@@ -398,93 +388,312 @@ async def download_attachment(message_id: str, attachment_name: str):
     raise HTTPException(404, "Attachment not found")
 
 
-@app.patch("/api/mail/read/{message_id}")
-async def mark_as_read(message_id: str):
-    """Mark a message as read."""
-    graph = _get_graph()
+# ---------------------------------------------------------------------------
+# Mail — all via WebSocket (except content fetch + downloads)
+# ---------------------------------------------------------------------------
+
+async def _ws_folders(graph, data: dict) -> dict:
+    """List mail folders with parent_id for tree rendering.
+
+    ``recursive=True`` walks ``childFolders`` so nested folders (e.g.
+    ``Inbox/News``) arrive alongside the top-level ones.  The client
+    assembles the tree from ``parent_id`` links.
+    """
+    folders = await graph.get_mail_folders().get_folders_async(recursive=True)
+    return {"folders": [f.model_dump() for f in folders]}
+
+
+async def _ws_messages(graph, data: dict) -> dict:
+    """List messages in a folder.
+
+    Supports delta-sync: when ``since_sig`` matches the current folder
+    state the server returns ``{unchanged: true, sig}`` and skips the
+    payload entirely.
+    """
+    folder_id = data.get("folder_id", "inbox")
+    limit = min(max(int(data.get("limit", 20)), 1), 100)
+    skip = max(int(data.get("skip", 0)), 0)
+    result = await graph.get_mail().email_index_async(
+        limit=limit, skip=skip, folder_id=folder_id,
+    )
+    rows = [_mail_to_search_row(m) for m in result.elements]
+    sig = compute_folder_signature(rows)
+    if data.get("since_sig") == sig:
+        return {"unchanged": True, "sig": sig}
+    return {"messages": rows, "total": result.total_mails, "sig": sig}
+
+
+async def _ws_get_mail(graph, data: dict) -> dict:
+    """Return a full message (body + headers + attachment metadata) over WS.
+
+    Embedded ``cid:`` images are resolved to base64 data URIs and
+    inlined into the body before send — the client never needs a
+    second round trip to render embedded images.  Attachment binaries
+    are NOT included; the client downloads those over HTTP on demand.
+    """
+    message_id = data.get("message_id")
+    if not message_id:
+        return {"error": "message_id is required"}
+    result = await graph.get_mail().get_mail_async(email_id=message_id)
+    if result is None:
+        return {"error": "Message not found"}
+    out = result.model_dump(exclude={"zip_data"})
+    if result.body and result.attachments:
+        out["body"] = _inline_cid_images(result.body, result.attachments)
+    out["attachments"] = [
+        {
+            "name": a.name,
+            "content_type": a.content_type,
+            "is_embedded": a.is_embedded,
+            "size": len(a.content_bytes) if a.content_bytes else 0,
+        }
+        for a in (result.attachments or []) if not a.is_embedded
+    ]
+    return out
+
+
+async def _ws_mark_read(graph, data: dict) -> dict:
+    message_id = data.get("message_id")
+    if not message_id:
+        return {"error": "message_id is required"}
+    is_read = bool(data.get("is_read", True))
     mail = graph.get_mail()
     await mail.flag_read_async(
-        f"{graph.msg_endpoint}me/messages/{message_id}", True
+        f"{graph.msg_endpoint}me/messages/{message_id}", is_read,
     )
-    return {"ok": True}
+    return {"ok": True, "is_read": is_read}
 
 
-@app.post("/api/mail/draft")
-async def create_draft(request: Request):
-    """Create a draft message."""
-    graph = _get_graph()
-    body = await request.json()
-    to = body.get("to", [])
-    subject = body.get("subject", "")
-    content = body.get("body", "")
-    is_html = body.get("is_html", False)
+async def _ws_create_draft(graph, data: dict) -> dict:
+    to = data.get("to", [])
+    subject = data.get("subject", "")
+    content = data.get("body", "")
+    is_html = data.get("is_html", False)
     if not to or not subject:
-        raise HTTPException(400, "to and subject are required")
+        return {"error": "to and subject are required"}
     mail = graph.get_mail()
     result = await mail.create_draft_async(
         to_recipients=to, subject=subject, body=content, is_html=is_html,
     )
     if result is None:
-        raise HTTPException(502, "Failed to create draft")
+        return {"error": "Failed to create draft"}
     return result
 
 
-@app.post("/api/mail/send")
-async def send_mail(request: Request):
-    """Send a new message directly."""
-    graph = _get_graph()
-    body = await request.json()
-    to = body.get("to", [])
-    subject = body.get("subject", "")
-    content = body.get("body", "")
-    is_html = body.get("is_html", False)
+async def _ws_send(graph, data: dict) -> dict:
+    to = data.get("to", [])
+    subject = data.get("subject", "")
+    content = data.get("body", "")
+    is_html = data.get("is_html", False)
     if not to or not subject:
-        raise HTTPException(400, "to and subject are required")
+        return {"error": "to and subject are required"}
     mail = graph.get_mail()
     ok = await mail.send_message_async(
         to_recipients=to, subject=subject, body=content, is_html=is_html,
+        cc_recipients=data.get("cc") or None,
+        bcc_recipients=data.get("bcc") or None,
     )
     if not ok:
-        raise HTTPException(502, "Failed to send")
+        return {"error": "Failed to send"}
     return {"ok": True}
 
 
-@app.post("/api/mail/draft/{message_id}/send")
-async def send_draft(message_id: str):
-    """Send an existing draft."""
-    graph = _get_graph()
+async def _ws_send_draft(graph, data: dict) -> dict:
+    message_id = data.get("message_id")
+    if not message_id:
+        return {"error": "message_id is required"}
     mail = graph.get_mail()
     ok = await mail.send_draft_async(message_id)
     if not ok:
-        raise HTTPException(502, "Failed to send draft")
+        return {"error": "Failed to send draft"}
     return {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# Mail reply
-# ---------------------------------------------------------------------------
-
-@app.post("/api/mail/reply")
-async def reply_to_message(request: Request):
-    """Reply (or reply-all) to a message."""
-    graph = _get_graph()
-    body = await request.json()
-    message_id = body.get("message_id")
-    comment = body.get("body", "")
-    reply_all = body.get("reply_all", False)
+async def _ws_reply(graph, data: dict) -> dict:
+    message_id = data.get("message_id")
+    comment = data.get("body", "")
+    reply_all = data.get("reply_all", False)
     if not message_id:
-        raise HTTPException(400, "message_id is required")
+        return {"error": "message_id is required"}
     token = await graph.get_access_token_async()
     if not token:
-        raise HTTPException(401, "Token expired")
+        return {"error": "Token expired"}
     action = "replyAll" if reply_all else "reply"
     url = f"{graph.msg_endpoint}me/messages/{message_id}/{action}"
     resp = await graph.run_async(
         url=url, method="POST", json={"comment": comment}, token=token,
     )
     if resp is None or resp.status_code >= 300:
-        raise HTTPException(502, "Failed to send reply")
+        return {"error": "Failed to send reply"}
     return {"ok": True}
+
+
+async def _ws_search(graph, data: dict) -> dict:
+    q = data.get("q", "").strip()
+    if not q:
+        return {"error": "q is required"}
+    limit = min(max(int(data.get("limit", 25)), 1), 100)
+    mail = graph.get_mail()
+    result = await mail.email_index_async(limit=limit, query=q)
+    return {
+        "messages": [_mail_to_search_row(m) for m in result.elements],
+        "query": q,
+    }
+
+
+async def _ws_delete(graph, data: dict) -> dict:
+    message_id = data.get("message_id")
+    if not message_id:
+        return {"error": "message_id is required"}
+    ok = await graph.get_mail().delete_message_async(message_id)
+    if not ok:
+        return {"error": "Failed to delete"}
+    return {"ok": True}
+
+
+async def _ws_move(graph, data: dict) -> dict:
+    message_id = data.get("message_id")
+    destination_id = data.get("destination_id") or data.get("destinationId")
+    if not message_id or not destination_id:
+        return {"error": "message_id and destination_id are required"}
+    result = await graph.get_mail().move_message_async(message_id, destination_id)
+    if result is None:
+        return {"error": "Failed to move"}
+    return result.model_dump()
+
+
+# ── Reactions (Outlook emoji responses) ─────────────────────────
+# Graph's ``message/reactions`` endpoint is still beta; we shell out
+# via the raw HTTP client so a handler upgrade in office-connect isn't
+# required.  In mock mode we keep per-session reaction state in memory.
+
+_REACTION_BETA = "https://graph.microsoft.com/beta/me/messages/"
+_mock_reactions: dict[str, list[dict]] = {}  # message_id → [{reactionType, user}]
+
+
+async def _ws_get_reactions(graph, data: dict) -> dict:
+    message_id = data.get("message_id")
+    if not message_id:
+        return {"error": "message_id is required"}
+    if MOCK_MODE:
+        return {"reactions": list(_mock_reactions.get(message_id, []))}
+    token = await graph.get_access_token_async()
+    if not token:
+        return {"error": "Token expired"}
+    try:
+        resp = await graph.run_async(url=f"{_REACTION_BETA}{message_id}/reactions", token=token)
+        if resp is None or resp.status_code >= 400:
+            return {"reactions": []}
+        return {"reactions": resp.json().get("value", [])}
+    except Exception:
+        return {"reactions": []}
+
+
+async def _ws_set_reaction(graph, data: dict) -> dict:
+    message_id = data.get("message_id")
+    rtype = data.get("reaction_type") or data.get("reactionType")
+    if not message_id or not rtype:
+        return {"error": "message_id and reaction_type are required"}
+    if MOCK_MODE:
+        mine = {"reactionType": rtype, "user": {"displayName": getattr(graph, "full_name", "Mock")}}
+        entries = [r for r in _mock_reactions.get(message_id, []) if r.get("user", {}).get("displayName") != mine["user"]["displayName"]]
+        entries.append(mine)
+        _mock_reactions[message_id] = entries
+        return {"ok": True, "reaction_type": rtype}
+    token = await graph.get_access_token_async()
+    if not token:
+        return {"error": "Token expired"}
+    try:
+        resp = await graph.run_async(
+            url=f"{_REACTION_BETA}{message_id}/setReaction",
+            method="POST", json={"reactionType": rtype}, token=token,
+        )
+        if resp is None or resp.status_code >= 300:
+            return {"error": "Failed to set reaction"}
+        return {"ok": True, "reaction_type": rtype}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+async def _ws_unset_reaction(graph, data: dict) -> dict:
+    message_id = data.get("message_id")
+    if not message_id:
+        return {"error": "message_id is required"}
+    if MOCK_MODE:
+        who = getattr(graph, "full_name", "Mock")
+        _mock_reactions[message_id] = [r for r in _mock_reactions.get(message_id, [])
+                                       if r.get("user", {}).get("displayName") != who]
+        return {"ok": True}
+    token = await graph.get_access_token_async()
+    if not token:
+        return {"error": "Token expired"}
+    try:
+        resp = await graph.run_async(
+            url=f"{_REACTION_BETA}{message_id}/unsetReaction",
+            method="POST", json={}, token=token,
+        )
+        if resp is None or resp.status_code >= 300:
+            return {"error": "Failed to clear reaction"}
+        return {"ok": True}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+_WS_ACTIONS = {
+    "folders": _ws_folders,
+    "messages": _ws_messages,
+    "get_mail": _ws_get_mail,
+    "mark_read": _ws_mark_read,
+    "create_draft": _ws_create_draft,
+    "send": _ws_send,
+    "send_draft": _ws_send_draft,
+    "reply": _ws_reply,
+    "search": _ws_search,
+    "delete": _ws_delete,
+    "move": _ws_move,
+    "get_reactions": _ws_get_reactions,
+    "set_reaction": _ws_set_reaction,
+    "unset_reaction": _ws_unset_reaction,
+}
+
+
+@app.websocket("/ws/mail")
+async def mail_ws(ws: WebSocket):
+    """Single WebSocket for all mail actions.
+
+    Session is identified by the ``mail_session`` cookie set during OAuth.
+    Client sends JSON: ``{"action": "<name>", "id": "<correlation>", ...data}``
+    Server responds: ``{"id": "<correlation>", ...result}``
+    """
+    sid = ws.cookies.get(SESSION_COOKIE)
+    graph = _sessions.get(sid) if sid else None
+    if graph is None:
+        await ws.close(code=4401, reason="Not authenticated")
+        return
+    await ws.accept()
+    _push.register(sid, ws, graph, _mail_to_search_row)
+    try:
+        while True:
+            msg = await ws.receive_json()
+            action = msg.get("action", "")
+            correlation_id = msg.get("id")
+            handler = _WS_ACTIONS.get(action)
+            if handler is None:
+                resp = {"error": f"Unknown action: {action}"}
+            else:
+                try:
+                    resp = await handler(graph, msg)
+                except Exception as exc:
+                    log.exception("WS action %s failed", action)
+                    resp = {"error": str(exc)}
+            if correlation_id is not None:
+                resp["id"] = correlation_id
+            resp["action"] = action
+            await ws.send_json(resp)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _push.unregister(sid, ws)
 
 
 # ---------------------------------------------------------------------------
@@ -492,9 +701,9 @@ async def reply_to_message(request: Request):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/people/email-map")
-async def people_email_map():
+async def people_email_map(request: Request):
     """Return email → user info mapping for sender photo matching."""
-    graph = _get_graph()
+    graph = _get_graph(request)
     directory = graph.get_directory()
     result = await directory.get_users_async()
     mapping = {}
@@ -511,9 +720,9 @@ async def people_email_map():
 
 
 @app.get("/api/people/search")
-async def search_people(q: str = Query("", min_length=0)):
+async def search_people(request: Request, q: str = Query("", min_length=0)):
     """Search the directory for people matching *q*."""
-    graph = _get_graph()
+    graph = _get_graph(request)
     directory = graph.get_directory()
     result = await directory.get_users_async()
     query = q.strip().lower()
@@ -538,9 +747,9 @@ async def search_people(q: str = Query("", min_length=0)):
 
 
 @app.get("/api/people/{user_id}/photo")
-async def get_person_photo(user_id: str):
+async def get_person_photo(request: Request, user_id: str):
     """Return a user's profile photo as image/jpeg, or 404."""
-    graph = _get_graph()
+    graph = _get_graph(request)
     directory = graph.get_directory()
     photo_bytes = await directory.get_user_photo_async(user_id)
     if photo_bytes is None:
@@ -554,8 +763,8 @@ async def get_person_photo(user_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/calendar/list")
-async def list_calendars():
-    graph = _get_graph()
+async def list_calendars(request: Request):
+    graph = _get_graph(request)
     cal = graph.get_calendar()
     calendars = await cal.get_calendars_async()
     return [
@@ -571,11 +780,12 @@ async def list_calendars():
 
 @app.get("/api/calendar/events")
 async def list_events(
+    request: Request,
     start: str = Query(None),
     end: str = Query(None),
     limit: int = Query(50, ge=1, le=200),
 ):
-    graph = _get_graph()
+    graph = _get_graph(request)
     cal = graph.get_calendar()
     now = datetime.now()
     start_dt = datetime.fromisoformat(start) if start else now - timedelta(days=7)
@@ -589,7 +799,7 @@ async def list_events(
 # ---------------------------------------------------------------------------
 
 @app.get("/api/chat/list")
-async def list_chats():
+async def list_chats(request: Request):
     """Return chat list for sidebar (id, topic, chatType, lastMessage, members)."""
     if MOCK_MODE:
         chats = _mock_data.get("chats", [])
@@ -604,7 +814,7 @@ async def list_chats():
             for c in chats
         ]
     # Real mode — use Graph API
-    graph = _get_graph()
+    graph = _get_graph(request)
     token = await graph.get_access_token_async()
     if not token:
         raise HTTPException(401, "Token expired")
@@ -642,7 +852,7 @@ async def list_chats():
 
 
 @app.get("/api/chat/{chat_id}")
-async def get_chat(chat_id: str):
+async def get_chat(request: Request, chat_id: str):
     """Return full chat with messages."""
     if MOCK_MODE:
         chats = _mock_data.get("chats", [])
@@ -651,7 +861,7 @@ async def get_chat(chat_id: str):
                 return c
         raise HTTPException(404, "Chat not found")
     # Real mode
-    graph = _get_graph()
+    graph = _get_graph(request)
     token = await graph.get_access_token_async()
     if not token:
         raise HTTPException(401, "Token expired")
@@ -707,7 +917,7 @@ async def get_chat(chat_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/teams/list")
-async def list_teams():
+async def list_teams(request: Request):
     """Return teams with channels."""
     if MOCK_MODE:
         teams = _mock_data.get("teams", [])
@@ -720,7 +930,7 @@ async def list_teams():
             for t in teams
         ]
     # Real mode
-    graph = _get_graph()
+    graph = _get_graph(request)
     token = await graph.get_access_token_async()
     if not token:
         raise HTTPException(401, "Token expired")
@@ -762,7 +972,7 @@ async def list_teams():
 
 
 @app.get("/api/teams/{team_id}/channels/{channel_id}/messages")
-async def get_channel_messages(team_id: str, channel_id: str):
+async def get_channel_messages(request: Request, team_id: str, channel_id: str):
     """Return messages for a specific channel."""
     if MOCK_MODE:
         teams = _mock_data.get("teams", [])
@@ -772,7 +982,7 @@ async def get_channel_messages(team_id: str, channel_id: str):
                 return {"messages": messages}
         raise HTTPException(404, "Team not found")
     # Real mode
-    graph = _get_graph()
+    graph = _get_graph(request)
     token = await graph.get_access_token_async()
     if not token:
         raise HTTPException(401, "Token expired")
@@ -812,13 +1022,13 @@ async def get_channel_messages(team_id: str, channel_id: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/files/recent")
-async def list_recent_files():
+async def list_recent_files(request: Request):
     """Return recently accessed files."""
     if MOCK_MODE:
         drive = _mock_data.get("drive", {})
         return drive.get("recent", [])
     # Real mode
-    graph = _get_graph()
+    graph = _get_graph(request)
     token = await graph.get_access_token_async()
     if not token:
         raise HTTPException(401, "Token expired")
@@ -852,13 +1062,13 @@ async def list_recent_files():
 
 
 @app.get("/api/files/my")
-async def list_my_files():
+async def list_my_files(request: Request):
     """Return files in the root of the user's OneDrive."""
     if MOCK_MODE:
         drive = _mock_data.get("drive", {})
         return drive.get("my_files", [])
     # Real mode
-    graph = _get_graph()
+    graph = _get_graph(request)
     token = await graph.get_access_token_async()
     if not token:
         raise HTTPException(401, "Token expired")
@@ -892,13 +1102,13 @@ async def list_my_files():
 
 
 @app.get("/api/files/shared")
-async def list_shared_files():
+async def list_shared_files(request: Request):
     """Return files shared with the current user."""
     if MOCK_MODE:
         drive = _mock_data.get("drive", {})
         return drive.get("shared", [])
     # Real mode
-    graph = _get_graph()
+    graph = _get_graph(request)
     token = await graph.get_access_token_async()
     if not token:
         raise HTTPException(401, "Token expired")
@@ -936,8 +1146,8 @@ async def list_shared_files():
 # ---------------------------------------------------------------------------
 
 @app.get("/api/profile")
-async def get_profile():
-    graph = _get_graph()
+async def get_profile(request: Request):
+    graph = _get_graph(request)
     handler = await graph.get_profile_async()
     if handler.me is None:
         raise HTTPException(502, "Could not load profile")

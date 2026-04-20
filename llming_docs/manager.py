@@ -182,6 +182,39 @@ class DocPluginManager:
             if t in _PREAMBLE_LINES:
                 lines.append(_PREAMBLE_LINES[t])
         lines.append(
+            "\n### Type Selection — Strict Mapping\n"
+            "Pick the document type from the user's request, not from your own preference:\n"
+            "- **Text, poem, letter, essay, article, notes, memo, minutes, story** → "
+            "`text_doc`. Always. A poem is a text document, not an email draft or HTML.\n"
+            "- **Table, list of rows, comparison, inventory** → `table`.\n"
+            "- **Sheet, spreadsheet, Excel, XLSX, workbook** → `table` (use the multi-sheet "
+            "`{sheets: [...]}` shape when the user explicitly wants multiple tabs, otherwise "
+            "flat `{columns, rows}`).\n"
+            "- **Slide deck, presentation, PowerPoint** → `presentation`.\n"
+            "- **Chart, plot, graph** → `plotly`.\n"
+            "- **Website, web page, interactive demo** → `html`.\n"
+            "- **Email, draft reply** → `email_draft`.\n"
+            "Never substitute a type because it seems faster or easier — the user's wording "
+            "determines the type."
+        )
+        lines.append(
+            "\n### Operating On an Existing Document\n"
+            "When the user asks you to **act on** an attached or uploaded document — "
+            "translate it, answer its questions, summarize it, rewrite it, fill it in, "
+            "reformat it, extract parts of it — always produce the result as a **new "
+            "document of the matching type**. Do not dump the result as chat text.\n"
+            "- PDF, DOCX, DOC, TXT, RTF, Markdown source → create a `text_doc`.\n"
+            "- XLSX, XLS, CSV, TSV → create a `table` (use `{sheets: [...]}` if the "
+            "source had multiple sheets and the user wants to preserve them).\n"
+            "- PPTX → create a `presentation`.\n"
+            "- HTML page / web form → create an `html` document.\n"
+            "- Email (`.eml`, forwarded message) → create an `email_draft` for the reply, "
+            "or a `text_doc` for a non-reply output like a summary.\n"
+            "The new document's `name` should reflect the operation (e.g. "
+            "*\"Contract — English translation\"*, *\"Survey — filled in\"*, "
+            "*\"Report Q1 — summary\"*) so the user can tell source and result apart."
+        )
+        lines.append(
             "\n### Data Reuse\n"
             "When the user asks to transform data you already have ('put this in a table', "
             "'show as chart'), reuse the data from previous tool results — do NOT re-query "
@@ -210,7 +243,8 @@ class DocPluginManager:
             "\n### Embedding Documents in Text Documents\n"
             "When the user asks to include/embed a chart, table, or other document in a text "
             "document (Word/DOCX), use an `embed` section that references the target by id. "
-            "**Never** fetch data with `read_document` or `plotly_get_data` and paste it in.\n"
+            "**Do not fetch** the data via `read_document` or `plotly_get_data` "
+            "and paste it in — **never copy** data when an embed reference works.\n"
             "\nUse `text_doc_add_section(document_id=<word-doc-id>, type=\"embed\", "
             "ref=\"<source-doc-id>\")`.\n"
             "\nOn export, embeds resolve automatically:\n"
@@ -221,7 +255,10 @@ class DocPluginManager:
         lines.append(
             "\n### Editing Documents (update_document)\n"
             "`update_document(document_id, operations)` applies surgical edits without "
-            "re-creating the document. Operations are atomic per call.\n"
+            "re-creating the document. Pass MULTIPLE operations in one call — they are "
+            "applied atomically (all-or-nothing). Prefer one call with many operations "
+            "over multiple calls: it is faster, creates a single undo step, and uses "
+            "less context.\n"
             "\nPath language — slash-separated, resolves against the document's data:\n"
             "- `slides/s1/title` — slide with id 's1', field 'title'.\n"
             "- `slides/0/elements/2/content` — first slide, third element, content.\n"
@@ -237,6 +274,13 @@ class DocPluginManager:
             "\nUse `read_document` to inspect before editing. Use `undo_document` to revert. "
             "**Always prefer `update_document` over re-creating** — it's faster, preserves "
             "history, and keeps the existing document id stable."
+            "\n\n**Title vs filename — do not confuse them.** The `name` argument to "
+            "`create_document` / `update_document` is the **filename** shown in the sidebar "
+            "and used on export (e.g. `Report.docx`). The in-document title (a heading "
+            "section, a slide title, a table caption, the email subject) lives inside "
+            "`data`. When the user says *'change the title'*, edit the title inside the "
+            "content — not the filename. Only change `name` when the user explicitly says "
+            "*'rename the document'*, *'change the filename'*, or similar."
         )
         if "plotly" in self._enabled_types:
             lines.append(

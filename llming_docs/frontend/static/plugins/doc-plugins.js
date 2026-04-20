@@ -1235,12 +1235,19 @@ const textDocPlugin = {
     // knowledge of our localStorage key — it just fires ldoc:invalidate-cache
     // with {docId} and any plugin that owns a cache for that doc drops it.
     function _onInvalidateCache(ev) {
-      if (!container.isConnected) {
-        document.removeEventListener('ldoc:invalidate-cache', _onInvalidateCache);
+      if (ev.detail?.docId !== _docId) {
+        if (!container.isConnected) {
+          document.removeEventListener('ldoc:invalidate-cache', _onInvalidateCache);
+        }
         return;
       }
-      if (ev.detail?.docId !== _docId) return;
+      // Drop the stale local edit cache before any new render reads it.
+      // Host fires this only on server-driven doc_updated events, so
+      // discarding the local cache is the correct behavior here.
       try { localStorage.removeItem('text_doc:edits:' + _docId); } catch (_) {}
+      if (!container.isConnected) {
+        document.removeEventListener('ldoc:invalidate-cache', _onInvalidateCache);
+      }
     }
     document.addEventListener('ldoc:invalidate-cache', _onInvalidateCache);
 

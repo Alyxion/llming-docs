@@ -35,6 +35,7 @@ from llming_docs.render import (
 )
 from llming_docs.unified_mcp import UnifiedDocumentMCP
 from llming_docs.validators import ValidationError, validate_document
+from llming_docs import pdf
 
 __all__ = [
     # Frontend manifest (client-side assets owned by llming-docs)
@@ -73,4 +74,6 @@ __all__ = [
     "register_embed_behavior",
     # Unified MCP (replaces type-specific MCPs)
     "UnifiedDocumentMCP",
+    # PDF read/render subpackage (pypdfium2 + pdfplumber — no AGPL)
+    "pdf",
 ]

@@ -148,4 +148,4 @@ Exporters accept `bytes`, return `bytes`. The store never writes to disk. The pa
 
 ## 9. No customer-specific names
 
-Nothing under `llming-docs` may reference any specific customer by name. This package is meant to be reused across products; customer branding stays in the host.
+Nothing under `llming-docs` may reference "Lechler" or any specific customer. This package is meant to be reused across products; customer branding stays in the host.
