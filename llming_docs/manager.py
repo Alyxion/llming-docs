@@ -40,40 +40,42 @@ _PREAMBLE_LINES: dict[str, str] = {
     "email_draft":  "- `email_draft` — Email draft. data = {subject, to: [...], cc: [...], bcc: [...], body_html, attachments: [{ref, name}]}",
 }
 
-# Per-type MCP server definitions (types without an entry only have frontend rendering)
+# Per-type MCP server definitions (types without an entry only have frontend rendering).
+# Module paths point at the per-type subpackages. The old flat paths
+# (llming_docs.text_doc_mcp etc.) remain as backwards-compat shims.
 _MCP_SERVERS: dict[str, dict] = {
     "plotly": {
-        "module": "llming_docs.plotly_mcp",
+        "module": "llming_docs.chart.mcp",
         "class_name": "PlotlyDocumentMCP",
         "label": "Plotly Charts",
         "description": "Edit and refine Plotly chart documents",
     },
     "table": {
-        "module": "llming_docs.table_mcp",
+        "module": "llming_docs.sheet.mcp",
         "class_name": "TableDocumentMCP",
         "label": "Tables",
         "description": "Edit table and spreadsheet documents",
     },
     "text_doc": {
-        "module": "llming_docs.text_doc_mcp",
+        "module": "llming_docs.text.mcp",
         "class_name": "TextDocMCP",
         "label": "Text Documents",
         "description": "Edit structured text documents",
     },
     "presentation": {
-        "module": "llming_docs.presentation_mcp",
+        "module": "llming_docs.slides.mcp",
         "class_name": "PresentationMCP",
         "label": "Presentations",
         "description": "Edit presentation slide decks",
     },
     "html": {
-        "module": "llming_docs.html_mcp",
+        "module": "llming_docs.web.mcp",
         "class_name": "HtmlDocumentMCP",
         "label": "Website",
         "description": "Create and edit websites, web apps, and interactive HTML/CSS/JS projects",
     },
     "email_draft": {
-        "module": "llming_docs.email_mcp",
+        "module": "llming_docs.email.mcp",
         "class_name": "EmailDraftMCP",
         "label": "Email Drafts",
         "description": "Compose and edit email drafts",
