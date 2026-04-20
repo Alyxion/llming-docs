@@ -53,18 +53,18 @@ warn_unused_configs = true
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = ["llming_docs.pptx_exporter", "llming_docs.word_exporter"]
+module = ["llming_docs.slides.exporter", "llming_docs.text.exporter"]
 ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = [
-    "llming_docs.plotly_mcp",
-    "llming_docs.table_mcp",
-    "llming_docs.text_doc_mcp",
-    "llming_docs.html_mcp",
-    "llming_docs.email_mcp",
+    "llming_docs.chart.mcp",
+    "llming_docs.sheet.mcp",
+    "llming_docs.text.mcp",
+    "llming_docs.web.mcp",
+    "llming_docs.email.mcp",
     "llming_docs.creator_mcp",
-    "llming_docs.presentation_mcp",
+    "llming_docs.slides.mcp",
 ]
 disable_error_code = ["union-attr", "assignment", "arg-type", "misc"]
 

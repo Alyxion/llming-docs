@@ -228,12 +228,12 @@ def _dispatch(
 ) -> bytes:
     """Dispatch to the appropriate exporter."""
     if doc_type == "text_doc" and target_format == "docx":
-        from llming_docs.word_exporter import export_docx
+        from llming_docs.text.exporter import export_docx
 
         return export_docx(spec, chart_images=ctx.chart_images)
 
     if doc_type == "presentation" and target_format == "pptx":
-        from llming_docs.pptx_exporter import export_pptx
+        from llming_docs.slides.exporter import export_pptx
 
         if not ctx.template_path:
             raise ValueError("Presentation export requires a template_path in context")
@@ -245,17 +245,17 @@ def _dispatch(
         )
 
     if doc_type == "table" and target_format == "xlsx":
-        from llming_docs.table_exporter import export_xlsx
+        from llming_docs.sheet.exporter import export_xlsx
 
         return export_xlsx(spec)
 
     if doc_type == "table" and target_format == "csv":
-        from llming_docs.table_exporter import export_csv
+        from llming_docs.sheet.exporter import export_csv
 
         return export_csv(spec)
 
     if doc_type in ("html", "html_sandbox") and target_format == "html":
-        from llming_docs.html_exporter import export_html
+        from llming_docs.web.exporter import export_html
 
         return export_html(spec)
 

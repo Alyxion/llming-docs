@@ -41,8 +41,7 @@ _PREAMBLE_LINES: dict[str, str] = {
 }
 
 # Per-type MCP server definitions (types without an entry only have frontend rendering).
-# Module paths point at the per-type subpackages. The old flat paths
-# (llming_docs.text_doc_mcp etc.) remain as backwards-compat shims.
+# Module paths point at the per-type subpackages (llming_docs.<type>.mcp).
 _MCP_SERVERS: dict[str, dict] = {
     "plotly": {
         "module": "llming_docs.chart.mcp",
