@@ -1,0 +1,63 @@
+site_name: llming-docs
+site_description: Structured documents for LLM chat — validation, undo, embedding, export
+site_url: https://alyxion.github.io/llming-docs
+repo_url: https://github.com/Alyxion/llming-docs
+repo_name: Alyxion/llming-docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Principles: principles.md
+  - Documents vs rich_mcp: docs-vs-rich-mcp.md
+  - Document Types: types.md
+  - Concepts:
+    - Validation: concepts/validation.md
+    - History & Undo: concepts/history-undo.md
+    - Embedding: concepts/embedding.md
+    - MCP Servers: concepts/mcp-servers.md
+  - Integration:
+    - Docking: integration/docking.md
+    - Frontend Assets: integration/frontend-assets.md
+    - Extending: integration/extending.md
+  - API:
+    - Stores & Manager: api/stores.md
+    - Render & Embed: api/rendering.md

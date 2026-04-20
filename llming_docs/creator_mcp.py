@@ -127,13 +127,30 @@ class DocumentCreatorMCP(InProcessMCPServer):
         if name == "create_document":
             data = arguments["data"]
             if isinstance(data, str):
-                data = json.loads(data)
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError as e:
+                    return json.dumps({
+                        "error": "json_parse_failed",
+                        "message": f"Failed to parse document data as JSON: {e}",
+                        "hint": "Ensure the data field is valid JSON. Check for trailing commas, missing quotes, or unclosed brackets.",
+                    })
             doc_type = self._TYPE_ALIASES.get(arguments["type"], arguments["type"])
-            doc = self._store.create(
+            result = self._store.create(
                 type=doc_type,
                 name=arguments["name"],
                 data=data,
             )
+            # Validation errors returned as list
+            if isinstance(result, list):
+                return json.dumps({
+                    "error": "validation_failed",
+                    "errors": [
+                        {"code": e.code, "message": e.message, "hint": e.hint, "path": e.path}
+                        for e in result
+                    ],
+                })
+            doc = result
             return json.dumps({
                 "status": "created",
                 "document_id": doc.id,

@@ -9,11 +9,12 @@ Dual path:
 import base64
 import io
 import logging
+from typing import Any
 
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 
 logger = logging.getLogger(__name__)
 
@@ -256,12 +257,15 @@ def _add_template_native_slide(prs, slide_spec: dict, template_config: dict,
                                 chart_images: dict, accent_color: str,
                                 text_color: str, subtitle_color: str,
                                 font_name: str):
-    """Add a slide using the template-native format (layout name + placeholders dict)."""
+    """Add a slide using the template-native format (layout name + placeholders dict).
+
+    Returns the created slide, or None if the layout was not found.
+    """
     layout_name = slide_spec.get("layout", "text")
     layout_def = _find_layout_def(template_config, layout_name)
     if not layout_def:
         logger.warning(f"[PPTX_EXPORT] Layout '{layout_name}' not found in template config")
-        return
+        return None
 
     layout_index = layout_def.get("layoutIndex", 0)
     layout = prs.slide_layouts[layout_index]
@@ -286,6 +290,8 @@ def _add_template_native_slide(prs, slide_spec: dict, template_config: dict,
             is_title_layout=is_title_layout,
             is_end_layout=is_end_layout,
         )
+
+    return slide
 
 
 # ── Legacy (abstract) path ───────────────────────────────────────
@@ -394,6 +400,7 @@ def _fill_content_elements(slide, elements: list[dict], chart_images: dict,
             rows = elem.get("rows", [])
             if not headers and not rows:
                 continue
+            cols = len(headers) if headers else (len(rows[0]) if rows else 0)
             total_rows = (1 if headers else 0) + len(rows)
             table_h = min(remaining_h, Inches(total_rows * 0.35 + 0.3))
             _add_table_shape(
@@ -430,9 +437,13 @@ def _fill_content_elements(slide, elements: list[dict], chart_images: dict,
 def _add_legacy_slide(prs, slide_spec: dict, idx: int, total: int,
                       chart_images: dict, accent: str, text_color: str,
                       subtitle_color: str, font_name: str):
-    """Add a slide using the legacy abstract format (elements list)."""
+    """Add a slide using the legacy abstract format (elements list).
+
+    Returns the created slide.
+    """
     is_title = _is_title_slide(slide_spec, idx)
     is_end = _is_end_slide(slide_spec, idx, total)
+    slide = None
 
     if is_title:
         layout = prs.slide_layouts[LAYOUT_TITLE]
@@ -510,8 +521,18 @@ def _add_legacy_slide(prs, slide_spec: dict, idx: int, total: int,
                 font_name=font_name,
             )
 
+    return slide
+
 
 # ── Public API ────────────────────────────────────────────────────
+
+def _apply_slide_notes(pptx_slide, slide_spec: dict) -> None:
+    """Add speaker notes to a slide if the spec contains a 'notes' field."""
+    notes_text = slide_spec.get("notes")
+    if notes_text:
+        notes_slide = pptx_slide.notes_slide
+        notes_slide.notes_text_frame.text = notes_text
+
 
 def export_pptx(spec: dict, template_path: str,
                 chart_images: dict | None = None,
@@ -533,27 +554,62 @@ def export_pptx(spec: dict, template_path: str,
     template_config = template_config or {}
     has_layouts = bool(template_config.get("layouts"))
 
+    # ── Theme overrides ──────────────────────────────────────────
+    # Theme values from the spec act as defaults when no explicit
+    # colors/fonts are set by template_config or the spec's own
+    # top-level fields.
+    theme = spec.get("theme") or {}
+    theme_primary = theme.get("primaryColor", "")
+    theme_accent = theme.get("accentColor", "")
+    theme_font = theme.get("fontFamily", "")
+
     prs = Presentation(template_path)
     slides_spec = spec.get("slides", [])
     total = len(slides_spec)
-    accent = template_config.get("accentColor") or spec.get("accentColor", "#1D459F")
-    text_color = template_config.get("textColor") or spec.get("textColor", "#333333")
-    subtitle_color = template_config.get("subtitleColor") or spec.get("subtitleColor", "#5695B4")
-    font_name = template_config.get("headingFont") or spec.get("headingFont", "Arial")
+
+    # Resolution order: template_config > spec top-level > theme > hardcoded default
+    accent = (template_config.get("accentColor")
+              or spec.get("accentColor")
+              or theme_primary
+              or "#1D459F")
+    text_color = (template_config.get("textColor")
+                  or spec.get("textColor")
+                  or "#333333")
+    subtitle_color = (template_config.get("subtitleColor")
+                      or spec.get("subtitleColor")
+                      or theme_accent
+                      or "#5695B4")
+    font_name = (template_config.get("headingFont")
+                 or spec.get("headingFont")
+                 or theme_font
+                 or "Arial")
 
     _remove_existing_slides(prs)
 
     for i, slide_spec in enumerate(slides_spec):
+        # ── Format field hook ────────────────────────────────────
+        slide_format = slide_spec.get("format", "simple")
+        if slide_format in ("markdown", "html"):
+            logger.warning(
+                "[PPTX_EXPORT] Slide %d: format '%s' not yet supported "
+                "for PPTX export, skipping", i, slide_format,
+            )
+            continue
+
         if has_layouts and slide_spec.get("placeholders"):
-            _add_template_native_slide(
+            pptx_slide = _add_template_native_slide(
                 prs, slide_spec, template_config,
                 chart_images, accent, text_color, subtitle_color, font_name,
             )
         else:
-            _add_legacy_slide(
+            pptx_slide = _add_legacy_slide(
                 prs, slide_spec, i, total,
                 chart_images, accent, text_color, subtitle_color, font_name,
             )
+
+        # ── Speaker notes ────────────────────────────────────────
+        if pptx_slide is not None:
+            _apply_slide_notes(pptx_slide, slide_spec)
 
     buf = io.BytesIO()
     prs.save(buf)

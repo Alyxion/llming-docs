@@ -7,9 +7,11 @@ into a binary DOCX file.
 import io
 import logging
 import re
+from typing import Any
 
 from docx import Document
 from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 logger = logging.getLogger(__name__)
 

@@ -12,6 +12,7 @@ from typing import List, Optional
 from llming_models.tools.mcp.config import MCPServerConfig
 from llming_docs.document_store import DocumentSessionStore
 from llming_docs.creator_mcp import DocumentCreatorMCP
+from llming_docs.unified_mcp import UnifiedDocumentMCP
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +28,16 @@ _TYPE_ALIASES: dict[str, str] = {
     "powerpoint": "presentation",
 }
 
-# Preamble fragment per type (auto-inserted into context_preamble)
+# Schema one-liner per type — shown in the preamble as guidance for the
+# `data` argument to create_document. Tool-only — no fenced blocks anywhere.
 _PREAMBLE_LINES: dict[str, str] = {
-    "plotly":       "- ```plotly  — Plotly.js chart (JSON: {data: [...], layout: {...}})",
-    "latex":        "- ```latex   — LaTeX formula",
-    "table":        "- ```table   — Data table / spreadsheet (JSON: {columns: [...], rows: [...]})",
-    "text_doc":     "- ```text_doc — Text document (JSON: {sections: [{type, content, ...}]})",
-    "presentation": "- ```presentation — Presentation / slide deck (JSON: {title, author, slideNumbers, slides: [{title, layout, elements: [...]}]})",
-    "html":         "- ```html_sandbox — Website / web app (HTML, CSS, JavaScript — JSON: {html, css, js, title})",
-    "email_draft":  "- ```email_draft — Email draft (JSON: {subject, to: [...], cc: [...], bcc: [...], body_html, attachments: [{ref, name}]})",
+    "plotly":       "- `plotly` — Plotly.js chart. data = {data: [...], layout: {...}}",
+    "latex":        "- `latex` — LaTeX formula. data = {formula: \"...\"}",
+    "table":        "- `table` — Data table / spreadsheet. data = {columns: [...], rows: [...]}",
+    "text_doc":     "- `text_doc` — Text document (DOCX-like). data = {sections: [{id, type, content, ...}]}",
+    "presentation": "- `presentation` — Slide deck (PPTX). data = {title, author, slideNumbers, slides: [{id, title, layout, elements: [...]}]}",
+    "html":         "- `html` — Website / web app. data = {html, css, js, title}",
+    "email_draft":  "- `email_draft` — Email draft. data = {subject, to: [...], cc: [...], bcc: [...], body_html, attachments: [{ref, name}]}",
 }
 
 # Per-type MCP server definitions (types without an entry only have frontend rendering)
@@ -137,82 +139,104 @@ class DocPluginManager:
     def get_preamble(self) -> str:
         """Build LLM preamble text for currently enabled doc plugin types.
 
-        Returns an empty string if no types are enabled.
+        Tool-only policy: documents are created and edited EXCLUSIVELY via the
+        MCP tools (``create_document``, ``update_document``, per-type edit tools).
+        Fenced code blocks (``` ``text_doc`` / ``plotly`` / ``table`` / … `` ```) are
+        NOT rendered as documents and will appear as plain, ugly JSON code blocks
+        to the user. Always use the tools.
+
+        When the session already has documents (created earlier in the same
+        conversation), a **Current Documents** inventory is appended so the
+        LLM can see their ids and names without having to re-parse every
+        earlier tool-call result — this is what prevents the common failure
+        mode of calling ``create_document`` again instead of ``update_document``.
         """
         if not self._enabled_types:
             return ""
 
         lines = [
-            "\n\n## Rich Document Rendering",
-            "The chat UI supports rendering rich documents inline. "
-            "To render visualizations directly in your response, use fenced code blocks "
-            "with these language identifiers:",
+            "\n\n## Documents — Tool-Only Policy",
+            "Documents (charts, tables, text documents, presentations, HTML, email drafts) "
+            "are created and edited **EXCLUSIVELY** via MCP tools. "
+            "Fenced code blocks with doc-type languages are **forbidden** — they are not "
+            "rendered as documents.",
+            "",
+            "**NEVER** write `" + "```" + "text_doc`, `" + "```" + "plotly`, `" + "```" + "table`, "
+            "`" + "```" + "presentation`, `" + "```" + "html`, `" + "```" + "latex`, or "
+            "`" + "```" + "email_draft` blocks in your response. "
+            "They will appear to the user as raw JSON and look broken.",
+            "",
+            "**ALWAYS** use:",
+            "- `create_document(type, name, data)` to create a new document.",
+            "- `update_document(document_id, operations)` to edit an existing document.",
+            "- `read_document(document_id, path?)` to inspect an existing document before editing.",
+            "- `undo_document(document_id)` to revert the last change.",
+            "- Per-type tools (`text_doc_add_section`, `plotly_add_trace`, `table_add_row`, …) "
+            "for type-specific operations.",
+            "",
+            "## Supported Document Types",
+            "Pass one of these as the `type` argument to `create_document` "
+            "(the shape shown is the `data` JSON payload):",
         ]
         for t in self._enabled_types:
             if t in _PREAMBLE_LINES:
                 lines.append(_PREAMBLE_LINES[t])
         lines.append(
-            "Always prefer these fenced code blocks for inline rendering. "
-            "Use the create_document tool only when the user explicitly asks for a persistent "
-            "document they can manage separately.\n\n"
-            "**CRITICAL**: The content inside fenced code blocks MUST be valid JSON. "
-            "Escape all double quotes inside string values with `\\\"`. "
-            "For example, `body_html` containing `<b>\"title\"</b>` must be written as "
-            "`\"body_html\": \"<b>\\\"title\\\"</b>\"`."
-        )
-        lines.append(
-            "\n### Data Reuse (IMPORTANT)\n"
-            "When the user asks to transform data you already have (e.g. 'put this in a table', "
-            "'show as chart', 'export as table'), **reuse the data from previous tool results** "
-            "in this conversation. Do NOT re-query databases or call data-fetching tools for "
-            "data that is already present in the conversation history from earlier tool calls."
+            "\n### Data Reuse\n"
+            "When the user asks to transform data you already have ('put this in a table', "
+            "'show as chart'), reuse the data from previous tool results — do NOT re-query "
+            "databases for data already present in the conversation."
         )
         lines.append(
             "\n### Document Identity & Updates\n"
-            "**ALWAYS** include an `\"id\"` field (UUID v4, e.g. `\"id\": \"a1b2c3d4-e5f6-...\"`) "
-            "in every document block you create. This is mandatory — no exceptions.\n"
-            "**ALWAYS** include a `\"name\"` field — a short, descriptive, human-readable filename "
-            "(e.g. `\"name\": \"Q1 Revenue Chart\"`, `\"name\": \"Sales by Region Table\"`, "
-            "`\"name\": \"Project Kickoff Deck\"`). This name appears in the sidebar document "
-            "panel and as the default export filename. Keep it concise but specific.\n"
-            "When the user asks you to update, enhance, or revise an existing document, "
-            "**reuse the exact same `\"id\"`** from the original block. This signals to the "
-            "system that you are providing an updated version of the same document rather than "
-            "a new one. Keeping the same id preserves continuity and is greatly appreciated.\n"
-            "Generate a fresh UUID only when creating a genuinely new document."
+            "Every document has an `id` generated by `create_document` and returned in the "
+            "tool result. To modify a document, pass that id to `update_document` / per-type "
+            "edit tools — never re-issue `create_document` for a document that already exists.\n"
+            "Always pass a short, descriptive `name` when creating (e.g. `\"Q1 Revenue Chart\"`, "
+            "`\"Sales by Region Table\"`, `\"Project Kickoff Deck\"`). The name appears in the "
+            "sidebar and as the default export filename."
         )
         lines.append(
-            "\n### Cross-Block References\n"
-            "Reference any earlier block via `{\"$ref\": \"<id>\"}` in any JSON "
-            "property of a later block. The referenced data merges as a base — explicit "
+            "\n### Cross-Document References\n"
+            "Reference any earlier document via `{\"$ref\": \"<id>\"}` in the JSON `data` "
+            "payload of a later document. The referenced data merges as a base; explicit "
             "properties in the referencing object override.\n"
-            "Example: a plotly block with `\"id\": \"<uuid>\"` can be embedded in a "
-            "presentation slide element as `{\"type\": \"chart\", \"$ref\": \"<uuid>\"}`.\n"
-            "Rules: only reference blocks that appear earlier in the conversation; "
-            "do not create circular references."
+            "Example: a Plotly chart (id `chart-abc`) can be embedded in a presentation slide "
+            "element as `{\"type\": \"chart\", \"$ref\": \"chart-abc\"}`.\n"
+            "Only forward references work — reference documents that already exist in the "
+            "conversation. No circular references."
         )
         lines.append(
-            "\n### Embedding Documents in Text Documents (CRITICAL)\n"
-            "When the user asks to include/add/embed a chart, table, or any other document "
-            "in a text document (Word/DOCX), **always use an embed section** referencing "
-            "the document by its ID. **Never** fetch or duplicate the data.\n"
-            "\nUse `text_doc_add_section` with:\n"
-            "- `type`: `\"embed\"`\n"
-            "- `ref`: `\"<document-id>\"`  (the ID of the plotly chart, table, etc.)\n"
-            "\nExample: to add a plotly chart (id `abc123`) to a Word document:\n"
-            "```json\n"
-            "text_doc_add_section(document_id=\"word-doc-id\", type=\"embed\", ref=\"abc123\")\n"
-            "```\n"
-            "On export, embeds are automatically converted:\n"
-            "- Charts/plots → PNG image\n"
-            "- Tables → native Word table\n"
-            "- Text documents → inlined sections\n"
-            "\nThe same `embed` section works in fenced ```text_doc blocks:\n"
-            "```json\n"
-            "{\"type\": \"embed\", \"$ref\": \"<document-id>\"}\n"
-            "```\n"
-            "**Do NOT** call `get_document` or `plotly_get_data` to copy data into the "
-            "Word document — just reference it by ID."
+            "\n### Embedding Documents in Text Documents\n"
+            "When the user asks to include/embed a chart, table, or other document in a text "
+            "document (Word/DOCX), use an `embed` section that references the target by id. "
+            "**Never** fetch data with `read_document` or `plotly_get_data` and paste it in.\n"
+            "\nUse `text_doc_add_section(document_id=<word-doc-id>, type=\"embed\", "
+            "ref=\"<source-doc-id>\")`.\n"
+            "\nOn export, embeds resolve automatically:\n"
+            "- Charts/plots → PNG image.\n"
+            "- Tables → native Word table.\n"
+            "- Text documents → inlined sections."
+        )
+        lines.append(
+            "\n### Editing Documents (update_document)\n"
+            "`update_document(document_id, operations)` applies surgical edits without "
+            "re-creating the document. Operations are atomic per call.\n"
+            "\nPath language — slash-separated, resolves against the document's data:\n"
+            "- `slides/s1/title` — slide with id 's1', field 'title'.\n"
+            "- `slides/0/elements/2/content` — first slide, third element, content.\n"
+            "- `sheets/Q1/rows/3/revenue` — sheet named 'Q1', row 3, column 'revenue'.\n"
+            "- `sections/abc123/content` — section with id 'abc123'.\n"
+            "- `to`, `subject`, `body_html` — top-level email fields.\n"
+            "- `data/0/x` — first Plotly trace, x values.\n"
+            "\nOperations:\n"
+            "- `set` — replace value: `{op: 'set', path: 'slides/s1/title', value: 'New Title'}`.\n"
+            "- `add` — insert: `{op: 'add', path: 'slides', value: {id: 's3', ...}, position: 2}`.\n"
+            "- `remove` — delete: `{op: 'remove', path: 'slides/s2'}`.\n"
+            "- `move` — reorder: `{op: 'move', path: 'slides/s1', position: 0}`.\n"
+            "\nUse `read_document` to inspect before editing. Use `undo_document` to revert. "
+            "**Always prefer `update_document` over re-creating** — it's faster, preserves "
+            "history, and keeps the existing document id stable."
         )
         if "plotly" in self._enabled_types:
             lines.append(
@@ -230,12 +254,12 @@ class DocPluginManager:
                 lines.append(
                     "\n### Presentations\n"
                     "When creating presentations:\n"
-                    "1. **Build data blocks first** — output ```table and ```plotly blocks "
-                    "with `\"id\"` fields BEFORE the ```presentation block. This lets data "
-                    "appear inline AND be referenced in slides.\n"
+                    "1. **Create data documents first** — call `create_document(type=\"table\", ...)` "
+                    "and `create_document(type=\"plotly\", ...)` BEFORE the presentation. Note the "
+                    "ids returned in the tool results; you will reference them from slides.\n"
                     "2. **Reference data via `$ref`** — in placeholder values use "
-                    "`{\"type\": \"chart\", \"$ref\": \"my-chart-id\"}` or "
-                    "`{\"type\": \"table\", \"$ref\": \"my-table-id\"}` to embed data.\n"
+                    "`{\"type\": \"chart\", \"$ref\": \"<chart-doc-id>\"}` or "
+                    "`{\"type\": \"table\", \"$ref\": \"<table-doc-id>\"}` to embed data.\n"
                     "3. **Keep text concise** — use bullet points, not paragraphs, to avoid overflow.\n"
                     "4. The presentation supports PPTX export and fullscreen viewing."
                 )
@@ -298,12 +322,12 @@ class DocPluginManager:
                 lines.append(
                     "\n### Presentation Best Practices\n"
                     "When creating presentations:\n"
-                    "1. **Build data blocks first** — output ```table and ```plotly blocks "
-                    "with `\"id\"` fields BEFORE the ```presentation block. This lets data "
-                    "appear inline AND be referenced in slides.\n"
+                    "1. **Create data documents first** — call `create_document(type=\"table\", ...)` "
+                    "and `create_document(type=\"plotly\", ...)` BEFORE the presentation. Use the "
+                    "returned ids in slide elements.\n"
                     "2. **Reference data via `$ref`** — in slide elements use "
-                    "`{\"type\": \"chart\", \"$ref\": \"my-chart-id\"}` or "
-                    "`{\"type\": \"table\", \"$ref\": \"my-table-id\"}` to embed data.\n"
+                    "`{\"type\": \"chart\", \"$ref\": \"<chart-doc-id>\"}` or "
+                    "`{\"type\": \"table\", \"$ref\": \"<table-doc-id>\"}` to embed data.\n"
                     "3. **Title slide** — set `\"layout\": \"title\"` on the first slide. "
                     "It renders with centered title, accent bar, and author line.\n"
                     "4. **Spec-level fields** — set `\"title\"`, `\"author\"`, "
@@ -329,17 +353,34 @@ class DocPluginManager:
             lines.append(
                 "\n### Email Drafts\n"
                 "When composing emails:\n"
-                "1. Use ````email_draft` fenced code blocks with JSON: "
-                "`{subject, to: [...], cc: [...], body_html, attachments: [{ref, name}]}`.\n"
+                "1. Call `create_document(type=\"email_draft\", name=\"<subject or summary>\", "
+                "data={subject, to: [...], cc: [...], body_html, attachments: [{ref, name}]})`.\n"
                 "2. Write `body_html` as clean, professional HTML suitable for email clients. "
                 "Use inline styles only (no `<style>` blocks). No JavaScript.\n"
                 "3. To attach files from the chat, add `{\"ref\": \"filename.pdf\", \"name\": \"Report\"}` "
                 "to the `attachments` array. You can reference chat attachments by filename "
-                "or documents created in the chat by their document ID.\n"
+                "or documents created in the chat by their document id.\n"
                 "4. The user will see a visual email preview with Draft and Send buttons — "
-                "you do NOT need to send the email yourself.\n"
-                "5. Always include `\"id\"` and `\"name\"` fields as with other document types."
+                "you do NOT need to send the email yourself."
             )
+
+        # Current-documents inventory — listed last so it's closest to the
+        # user's next message in context. Without this the LLM loses track
+        # of existing doc ids across turns and defaults to create_document.
+        docs = self.store.list_all()
+        if docs:
+            lines.append("\n### Current Documents (update, don't re-create)")
+            lines.append(
+                "The following documents already exist in this conversation. "
+                "When the user asks to edit/extend/modify any of them, call "
+                "`update_document(document_id=<id>, operations=[...])` (or a "
+                "per-type tool like `text_doc_add_section`). **Do NOT** call "
+                "`create_document` again — that would duplicate the document."
+            )
+            for d in docs:
+                lines.append(
+                    f"- `id={d.id}`  type=`{d.type}`  v{d.version}  name={d.name!r}"
+                )
         return "\n".join(lines) + "\n"
 
     def get_mcp_configs(self) -> List[MCPServerConfig]:
@@ -365,7 +406,19 @@ class DocPluginManager:
             requires_providers=self._requires_providers,
         ))
 
-        # Per-type MCP servers
+        # Unified document editor — update, read, undo across all types
+        unified = UnifiedDocumentMCP(self.store)
+        self._mcp_instances.append(unified)
+        configs.append(MCPServerConfig(
+            server_instance=unified,
+            label="Document Editor",
+            description="Edit, read sections, search, and undo changes in any document",
+            category="Documents",
+            enabled_by_default=False,
+            requires_providers=self._requires_providers,
+        ))
+
+        # Per-type MCP servers (legacy — to be phased out)
         for doc_type in self._enabled_types:
             spec = _MCP_SERVERS.get(doc_type)
             if not spec:

@@ -1,0 +1,1761 @@
+/* chat-documents.css — Document plugin blocks, source viewer, plotly, table, latex, text_doc, pptx, html sandbox, workspace panel, doc list, preview, lightbox, streaming spinner */
+
+/* ══════════════════════════════════════════════════════════
+   Shared scrollbar styling for all doc containers
+   ══════════════════════════════════════════════════════════ */
+
+
+
+
+/* Firefox */
+
+/* Dark mode */
+
+
+
+
+/* ══════════════════════════════════════════════════════════
+   Document Plugin Blocks
+   ══════════════════════════════════════════════════════════ */
+
+
+
+
+
+.ldoc-plugin-export {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--chat-border);
+  background: rgba(0,0,0,0.02);
+}
+
+#chat-app.cv2-dark .ldoc-plugin-export {
+  background: rgba(255,255,255,0.03);
+}
+
+.ldoc-export-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--chat-border);
+  background: var(--chat-surface);
+  color: var(--chat-text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ldoc-export-btn:hover {
+  background: var(--chat-accent);
+  color: #fff;
+  border-color: var(--chat-accent);
+}
+
+.ldoc-window-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  border-color: var(--chat-accent);
+  color: var(--chat-accent);
+}
+/* ── Inline blocks: hide rich toolbar & source button (show only in windowed) ── */
+
+/* In the workspace panel we render the FULL editor (toolbar + editable body)
+ * — not a preview. Matches the popover's windowed/maximized treatment. */
+
+
+/* ── Mobile: no window mode, no source editing, no manual editing ── */
+@media (max-width: 768px) {
+  .ldoc-window-btn,
+  .ldoc-source-btn { display: none !important; }
+  .ldoc-email-chip-x,
+  .ldoc-email-search-wrap,
+  .ldoc-email-add-field-btn,
+  .ldoc-email-att-add-btn,
+  .ldoc-email-att-remove,
+  .ldoc-email-ctx-menu { display: none !important; }
+  .ldoc-email-editable { pointer-events: none; }
+}
+
+/* ── Source viewer (shared across all plugin types) ───── */
+
+.ldoc-source-btn.cv2-active {
+  background: var(--chat-accent);
+  color: #fff;
+  border-color: var(--chat-accent);
+}
+
+.ldoc-source-panel {
+  position: relative;
+  margin-top: 6px;
+  border-radius: 6px;
+  border: 1px solid var(--chat-border);
+  background: rgba(0,0,0,0.03);
+  max-height: 280px;
+  overflow: auto;
+  font-size: 12px;
+  animation: ldoc-source-in 0.15s ease;
+}
+
+#chat-app.cv2-dark .ldoc-source-panel {
+  background: rgba(255,255,255,0.04);
+}
+
+@keyframes ldoc-source-in {
+  from { opacity: 0; max-height: 0; }
+  to   { opacity: 1; max-height: 280px; }
+}
+
+.ldoc-source-panel pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--chat-text-muted);
+}
+
+.ldoc-source-copy {
+  position: sticky;
+  top: 0;
+  float: right;
+  margin: 6px 6px 0 0;
+  padding: 2px 10px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--chat-border);
+  background: var(--chat-surface);
+  color: var(--chat-text-muted);
+  cursor: pointer;
+  z-index: 1;
+  transition: all 0.15s;
+}
+
+.ldoc-source-copy:hover {
+  background: var(--chat-accent);
+  color: #fff;
+  border-color: var(--chat-accent);
+}
+
+/* ── Plotly Plugin ─────────────────────────────────────── */
+
+.ldoc-plotly-container {
+  position: relative;
+  cursor: pointer;
+}
+
+.ldoc-plotly-preview {
+  width: 100%;
+  min-height: 260px;
+  max-height: 360px;
+  overflow: hidden;
+}
+
+.ldoc-plotly-preview .js-plotly-plot {
+  pointer-events: none;
+}
+
+.ldoc-plotly-expand-hint {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.ldoc-plotly-expand-hint .material-icons { font-size: 18px; }
+
+.ldoc-plotly-container:hover .ldoc-plotly-expand-hint {
+  opacity: 1;
+}
+
+/* ── Rich MCP Inline Card ──────────────────────────────── */
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* ── Plotly Lightbox ──────────────────────────────────── */
+
+.ldoc-plotly-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  background: rgba(0,0,0,0.88);
+  display: flex;
+  flex-direction: column;
+  animation: ldoc-plotly-lb-in 0.2s ease;
+}
+
+@keyframes ldoc-plotly-lb-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ldoc-plotly-lightbox-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(0,0,0,0.4);
+  color: #e5e7eb;
+  flex-shrink: 0;
+}
+
+.ldoc-plotly-lightbox-title {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ldoc-plotly-lightbox-chrome .ldoc-export-btn {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.2);
+  color: #e5e7eb;
+}
+
+.ldoc-plotly-lightbox-chrome .ldoc-export-btn:hover {
+  background: var(--chat-accent);
+  color: #fff;
+  border-color: var(--chat-accent);
+}
+
+.ldoc-plotly-lightbox-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.1);
+  color: #e5e7eb;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ldoc-plotly-lightbox-close:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+.ldoc-plotly-lightbox-plot {
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+}
+
+.ldoc-plotly-lightbox-plot .js-plotly-plot,
+.ldoc-plotly-lightbox-plot .plot-container,
+.ldoc-plotly-lightbox-plot .svg-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── Table Plugin ──────────────────────────────────────── */
+
+.ldoc-table-wrapper {
+  overflow-x: auto;
+  padding: 4px;
+  contain: layout style;  /* isolate table layout from scroll reflow */
+}
+
+.ldoc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ldoc-table th {
+  background: rgba(var(--chat-accent-rgb), 0.08);
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--chat-border);
+  white-space: nowrap;
+}
+
+.ldoc-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--chat-border);
+}
+
+.ldoc-table tbody tr:hover {
+  background: rgba(var(--chat-accent-rgb), 0.04);
+}
+
+/* ── LaTeX Plugin ──────────────────────────────────────── */
+
+.ldoc-latex {
+  text-align: center;
+  padding: 16px 12px;
+  overflow-x: auto;
+}
+
+/* ── Word Plugin ───────────────────────────────────────── */
+
+.ldoc-text, .ldoc-word {
+  padding: 20px 24px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  max-height: calc(1.5em * 6 + 40px);  /* ~6 lines + padding; pop out for full view */
+  overflow: auto;
+  contain: layout style;
+}
+
+.ldoc-text h1, .ldoc-word h1 { font-size: 22px; margin: 0 0 12px; }
+.ldoc-text h2, .ldoc-word h2 { font-size: 18px; margin: 16px 0 8px; }
+.ldoc-text h3, .ldoc-word h3 { font-size: 15px; margin: 12px 0 6px; }
+.ldoc-text p, .ldoc-word p { margin: 0 0 4px; }
+.ldoc-text ul, .ldoc-text ol, .ldoc-word ul, .ldoc-word ol { margin: 0 0 10px; padding-left: 24px; }
+
+/* ── Presentation Plugin ───────────────────────────────── */
+
+.ldoc-pptx {
+  background: #2d2d2d;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.ldoc-pptx-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px;
+  background: rgba(0,0,0,0.3);
+  color: #ccc;
+  font-size: 12px;
+}
+
+.ldoc-pptx-nav button {
+  background: rgba(255,255,255,0.1);
+  border: none;
+  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.ldoc-pptx-nav button:hover:not(:disabled) {
+  background: rgba(255,255,255,0.2);
+}
+
+.ldoc-pptx-nav button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* Inline slide container */
+.ldoc-pptx-slide-container {
+  padding: 12px;
+}
+
+/* Shared slide frame (used in inline + lightbox) */
+.ldoc-pptx-slide-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 960 / 540;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.ldoc-pptx-virtual {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 960px;
+  height: 540px;
+  transform-origin: top left;
+  color: #1a1a1a;
+}
+
+.ldoc-pptx-elem {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+/* ── PPTX Lightbox ──────────────────────────────────────── */
+
+.ldoc-pptx-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  background: rgba(0,0,0,0.92);
+  display: flex;
+  flex-direction: column;
+  animation: ldoc-pptx-lb-in 0.2s ease;
+}
+
+@keyframes ldoc-pptx-lb-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ldoc-pptx-lightbox-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(0,0,0,0.4);
+  color: #e5e7eb;
+  flex-shrink: 0;
+}
+
+.ldoc-pptx-lightbox-title {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ldoc-pptx-lightbox-counter {
+  font-size: 13px;
+  color: #9ca3af;
+  margin-left: 8px;
+}
+
+.ldoc-pptx-lightbox-chrome .ldoc-export-btn {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.2);
+  color: #e5e7eb;
+}
+
+.ldoc-pptx-lightbox-chrome .ldoc-export-btn:hover {
+  background: var(--chat-accent);
+  color: #fff;
+  border-color: var(--chat-accent);
+}
+
+.ldoc-pptx-lightbox-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.1);
+  color: #e5e7eb;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ldoc-pptx-lightbox-close:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+.ldoc-pptx-lightbox-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 16px;
+  position: relative;
+}
+
+.ldoc-pptx-lightbox-slide-wrap {
+  max-width: min(90vw, 1200px);
+  max-height: 80vh;
+  width: 100%;
+  aspect-ratio: 960 / 540;
+}
+
+.ldoc-pptx-lightbox-slide-wrap .ldoc-pptx-slide-frame {
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+}
+
+.ldoc-pptx-lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  z-index: 2;
+}
+
+.ldoc-pptx-lightbox-nav:hover {
+  background: rgba(255,255,255,0.3);
+}
+
+.ldoc-pptx-lightbox-nav:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
+.ldoc-pptx-lightbox-nav--prev { left: 16px; }
+.ldoc-pptx-lightbox-nav--next { right: 16px; }
+
+/* ── HTML Sandbox Plugin ───────────────────────────────── */
+
+.ldoc-html {
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.ldoc-html-iframe {
+  width: 100%;
+  min-height: 300px;
+  border: none;
+  display: block;
+}
+
+.ldoc-html-tabs {
+  display: flex;
+  gap: 0;
+  border-top: 1px solid var(--chat-border);
+}
+
+.ldoc-html-tab {
+  padding: 5px 12px;
+  font-size: 11px;
+  border: none;
+  background: none;
+  color: var(--chat-text-muted);
+  cursor: pointer;
+}
+
+.ldoc-html-tab:hover {
+  color: var(--chat-accent);
+}
+
+.ldoc-html-source {
+  padding: 12px;
+  font-size: 12px;
+  background: rgba(0,0,0,0.04);
+  border-top: 1px solid var(--chat-border);
+  overflow-x: auto;
+  max-height: 300px;
+  margin: 0;
+}
+
+#chat-app.cv2-dark .ldoc-html-source {
+  background: rgba(255,255,255,0.04);
+}
+
+/* ── Inline card for workspace-bound plugins ─────────── */
+
+
+
+
+
+
+
+
+/* ── Document List (overlay panel, right edge) ───────── */
+/* Workspace is a regular flex sibling of .ldoc-main in its default (docked)
+ * state: chat-app's row layout naturally shrinks the chat area when the
+ * workspace is open, and gives it back when it's closed. The panel can be
+ * "undocked" into a floating window that hovers over the chat, and re-docked
+ * again (tablet/desktop only — the control is hidden on mobile to prevent
+ * accidental activation). */
+
+
+
+
+/* ── Undocked / floating state ──────────────────────────────────
+ * Panel lifts out of the flex row and hovers over the chat. User can
+ * drag it by the header and resize from the bottom-right corner. */
+
+
+
+
+/* On narrow screens, the workspace becomes a full-width overlay so the
+ * chat beneath isn't squeezed to a useless sliver. Undocking is disabled
+ * here — see CSS below that hides the undock toggle via media query. */
+
+
+
+
+
+
+
+/* ── Tab strip (VS-Code style, multi-row via flex-wrap) ─────────── */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* ── Document rendered inside the panel body ───────────────────
+ * The inline card styling (card border + 12px margin + 6-line
+ * max-height on .ldoc-text) is wrong here: the panel IS the
+ * card. Strip border/margin/rounding so the editor fills the
+ * full panel, and release the max-height so the content scrolls
+ * inside the panel body rather than inside a tiny inner box. */
+
+
+
+
+/* Also fill height for email drafts and HTML sandboxes. */
+
+
+/* ── Topbar Workspace Toggle ─────────────────────────── */
+
+
+
+
+/* ── Doc Cards ───────────────────────────────────────── */
+.ldoc-card {
+  border: 1px solid var(--chat-border);
+  border-radius: 8px;
+  margin-bottom: 4px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  overflow: hidden;
+}
+.ldoc-card:hover {
+  border-color: var(--chat-accent);
+  background: rgba(var(--chat-accent-rgb), 0.04);
+}
+.ldoc-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.ldoc-card-icon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+}
+.ldoc-card-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ldoc-card-version {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(var(--chat-accent-rgb), 0.1);
+  color: var(--chat-accent);
+}
+.ldoc-card-type {
+  font-size: 11px;
+  color: var(--chat-text-muted);
+}
+.ldoc-card-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--chat-border);
+  background: var(--chat-surface);
+  color: var(--chat-text-muted);
+  cursor: pointer;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.ldoc-card:hover .ldoc-card-btn,
+.ldoc-card .ldoc-card-btn:focus { opacity: 1; }
+.ldoc-card-btn:hover {
+  background: var(--chat-accent);
+  color: #fff;
+  border-color: var(--chat-accent);
+}
+.ldoc-delete-btn:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+}
+
+
+/* Highlight flash when scrolling to a doc from sidebar */
+@keyframes ldoc-flash {
+  0% { outline: 2px solid var(--chat-accent, #3b82f6); outline-offset: 4px; }
+  100% { outline: 2px solid transparent; outline-offset: 4px; }
+}
+
+
+/* ── Plugin Block Streaming Spinner ───────────────────── */
+.cv2-doc-plugin-streaming {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border: 1px solid var(--chat-border);
+  border-radius: 10px;
+  background: rgba(var(--chat-accent-rgb), 0.04);
+  margin: 8px 0;
+}
+
+.ldoc-plugin-streaming-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--chat-text-muted);
+}
+
+/* ── Mermaid diagrams ───────────────────────────────────── */
+
+
+
+
+
+/* ── Email Draft ─────────────────────────────────────────── */
+.ldoc-email-draft {
+  border: 1px solid var(--chat-border, #e5e7eb);
+  border-radius: var(--chat-radius, 8px);
+  background: var(--chat-surface, #fff);
+  overflow: hidden;
+  margin: 4px 0;
+}
+.ldoc-email-draft-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: var(--chat-surface-alt, #f9fafb);
+  border-bottom: 1px solid var(--chat-border, #e5e7eb);
+}
+.cv2-dark .ldoc-email-draft-header { background: rgba(255,255,255,0.03); }
+.ldoc-email-draft-icon { font-size: 22px; color: #3b82f6; }
+.ldoc-email-draft-title {
+  flex: 1; font-weight: 600; font-size: 14px;
+  color: var(--chat-text, #1f2937);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ldoc-email-draft-badge {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 10px;
+  background: #dbeafe; color: #1d4ed8;
+}
+.cv2-dark .ldoc-email-draft-badge { background: rgba(59,130,246,0.2); color: #60a5fa; }
+.ldoc-email-badge-saved { background: #dcfce7; color: #15803d; }
+.cv2-dark .ldoc-email-badge-saved { background: rgba(34,197,94,0.2); color: #4ade80; }
+.ldoc-email-badge-sent { background: #d1fae5; color: #047857; }
+.cv2-dark .ldoc-email-badge-sent { background: rgba(16,185,129,0.2); color: #34d399; }
+
+/* Meta fields */
+.ldoc-email-draft-meta {
+  padding: 8px 14px; font-size: 13px;
+  border-bottom: 1px solid var(--chat-border, #e5e7eb);
+}
+.ldoc-email-field {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: 3px 0;
+}
+.ldoc-email-field-label {
+  font-weight: 600; color: var(--chat-text-muted, #6b7280);
+  min-width: 52px; flex-shrink: 0;
+}
+.ldoc-email-field-value {
+  color: var(--chat-text, #1f2937);
+}
+.ldoc-email-chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.ldoc-email-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 12px; font-size: 12px;
+  background: var(--chat-surface-alt, #f3f4f6);
+  color: var(--chat-text, #1f2937);
+  border: 1px solid var(--chat-border, #e5e7eb);
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cv2-dark .ldoc-email-chip { background: rgba(255,255,255,0.06); }
+
+/* Editable fields */
+.ldoc-email-editable {
+  cursor: text;
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: -1px -4px;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+.ldoc-email-editable:hover {
+  background: rgba(59,130,246,0.06);
+}
+.ldoc-email-editable:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.3);
+  background: rgba(59,130,246,0.04);
+}
+.cv2-dark .ldoc-email-editable:hover { background: rgba(96,165,250,0.1); }
+.cv2-dark .ldoc-email-editable:focus { background: rgba(96,165,250,0.08); }
+
+/* Body (editable contenteditable div) */
+.ldoc-email-draft-body {
+  padding: 0; min-height: 80px; max-height: 420px; overflow: auto;
+}
+.ldoc-email-body-content {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--chat-text, #1f2937);
+  padding: 12px 14px;
+  min-height: 80px;
+  outline: none;
+  cursor: text;
+}
+.ldoc-email-body-content:focus {
+  box-shadow: inset 0 0 0 2px rgba(59,130,246,0.2);
+}
+.ldoc-email-body-content a { color: #2563eb; }
+.cv2-dark .ldoc-email-body-content a { color: #93c5fd; }
+.ldoc-email-body-content p { margin: 0 0 8px; }
+.ldoc-email-body-content ul, .ldoc-email-body-content ol { margin: 0 0 8px; padding-left: 24px; list-style: revert; }
+.ldoc-email-body-content ul { list-style-type: disc; }
+.ldoc-email-body-content ol { list-style-type: decimal; }
+.ldoc-email-body-content h1, .ldoc-email-body-content h2, .ldoc-email-body-content h3 {
+  margin: 12px 0 6px; font-weight: 600;
+}
+.ldoc-email-body-content h1 { font-size: 18px; }
+.ldoc-email-body-content h2 { font-size: 16px; }
+.ldoc-email-body-content h3 { font-size: 14px; }
+.ldoc-email-empty {
+  display: block; padding: 20px; text-align: center;
+  color: var(--chat-text-muted, #9ca3af); font-style: italic;
+}
+
+/* Attachments */
+.ldoc-email-attachments {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 14px;
+  border-top: 1px solid var(--chat-border, #e5e7eb);
+  font-size: 12px;
+}
+.ldoc-email-att-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 3px 8px; border-radius: 4px;
+  background: var(--chat-surface-alt, #f3f4f6);
+  color: var(--chat-text, #374151);
+  border: 1px solid var(--chat-border, #e5e7eb);
+  max-width: 220px;
+  cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.ldoc-email-att-chip:hover {
+  background: var(--chat-surface, #e5e7eb);
+  border-color: var(--chat-text-muted, #9ca3af);
+}
+.cv2-dark .ldoc-email-att-chip { background: rgba(255,255,255,0.06); }
+.cv2-dark .ldoc-email-att-chip:hover { background: rgba(255,255,255,0.12); border-color: #6b7280; }
+.ldoc-email-att-remove {
+  cursor: pointer; margin-left: 2px; font-size: 14px; font-weight: 700;
+  color: var(--chat-text-muted, #9ca3af); line-height: 1;
+}
+.ldoc-email-att-remove:hover { color: #ef4444; }
+.ldoc-email-att-add-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 3px 10px; border-radius: 4px; font-size: 12px;
+  border: 1px dashed var(--chat-border, #d1d5db);
+  background: transparent; color: var(--chat-text-muted, #9ca3af);
+  cursor: pointer; transition: all 0.15s;
+}
+.ldoc-email-att-add-btn:hover {
+  border-color: var(--chat-accent, #3b82f6); color: var(--chat-accent, #3b82f6);
+  background: rgba(59,130,246,0.04);
+}
+.cv2-dark .ldoc-email-att-add-btn:hover { background: rgba(96,165,250,0.08); }
+
+/* Attach menu */
+.ldoc-email-att-menu {
+  position: fixed; z-index: 10000;
+  min-width: 200px; max-width: 300px;
+  background: var(--chat-surface, #fff); border: 1px solid var(--chat-border, #e5e7eb);
+  border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 4px 0; font-size: 13px;
+}
+.cv2-dark .ldoc-email-att-menu { background: #1e1e2e; border-color: #374151; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+.ldoc-email-att-menu-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; cursor: pointer; color: var(--chat-text, #1f2937);
+  transition: background 0.1s;
+}
+.ldoc-email-att-menu-item:hover { background: rgba(59,130,246,0.08); }
+.cv2-dark .ldoc-email-att-menu-item:hover { background: rgba(96,165,250,0.12); }
+.ldoc-email-att-menu-sep {
+  padding: 6px 12px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  color: var(--chat-text-muted, #9ca3af); letter-spacing: 0.03em;
+  border-top: 1px solid var(--chat-border, #e5e7eb); margin-top: 2px;
+}
+.ldoc-email-badge-error { background: #fecaca !important; color: #dc2626 !important; }
+.cv2-dark .ldoc-email-badge-error { background: rgba(239,68,68,0.2) !important; color: #f87171 !important; }
+
+/* Action buttons */
+.ldoc-email-draft-actions {
+  display: flex; gap: 8px; padding: 10px 14px;
+  border-top: 1px solid var(--chat-border, #e5e7eb);
+  background: var(--chat-surface-alt, #f9fafb);
+}
+.cv2-dark .ldoc-email-draft-actions { background: rgba(255,255,255,0.02); }
+.ldoc-email-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 16px; border-radius: 6px; font-size: 13px; font-weight: 500;
+  border: 1px solid var(--chat-border, #d1d5db); cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ldoc-email-btn-draft {
+  background: var(--chat-surface, #fff); color: var(--chat-text, #374151);
+}
+.ldoc-email-btn-draft:hover { background: var(--chat-surface-alt, #f3f4f6); }
+.ldoc-email-btn-send {
+  background: #3b82f6; color: #fff; border-color: #3b82f6;
+}
+.ldoc-email-btn-send:hover { background: #2563eb; border-color: #2563eb; }
+.ldoc-email-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ldoc-email-btn-success { background: #10b981 !important; border-color: #10b981 !important; color: #fff !important; }
+.ldoc-email-btn-error { background: #ef4444 !important; border-color: #ef4444 !important; color: #fff !important; }
+.cv2-dark .ldoc-email-btn-draft { background: rgba(255,255,255,0.06); color: var(--chat-text, #e5e7eb); }
+
+/* Spin animation for loading state */
+@keyframes cv2-spin { to { transform: rotate(360deg); } }
+.cv2-spin { animation: cv2-spin 1s linear infinite; }
+
+/* Recipient search input */
+.ldoc-email-search-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 1;
+  min-width: 80px;
+}
+.ldoc-email-search-input {
+  width: 100%;
+  min-width: 60px;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 12px;
+  padding: 2px 4px;
+  color: var(--chat-text, #1f2937);
+}
+.ldoc-email-search-input::placeholder {
+  color: var(--chat-text-muted, #9ca3af);
+}
+.ldoc-email-search-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+  min-width: 260px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--chat-surface, #fff);
+  border: 1px solid var(--chat-border, #d1d5db);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  margin-top: 4px;
+}
+.cv2-dark .ldoc-email-search-dropdown {
+  background: #1e293b;
+  border-color: #334155;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.ldoc-email-search-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ldoc-email-search-item:hover {
+  background: var(--chat-surface-alt, #f3f4f6);
+}
+.cv2-dark .ldoc-email-search-item:hover {
+  background: rgba(255,255,255,0.06);
+}
+.ldoc-email-search-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--chat-text, #1f2937);
+}
+.ldoc-email-search-detail {
+  font-size: 11px;
+  color: var(--chat-text-muted, #6b7280);
+  margin-top: 1px;
+}
+.ldoc-email-search-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--chat-text-muted, #9ca3af);
+}
+
+/* Chip remove button */
+.ldoc-email-chip-x {
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+  margin-left: 2px;
+}
+.ldoc-email-chip-x:hover {
+  opacity: 1;
+  color: #ef4444;
+}
+
+/* +Cc / +Bcc toggle buttons */
+.ldoc-email-add-fields {
+  padding: 2px 0;
+}
+.ldoc-email-add-field-btn {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px dashed var(--chat-border, #d1d5db);
+  background: transparent;
+  color: var(--chat-text-muted, #6b7280);
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-right: 6px;
+}
+.ldoc-email-add-field-btn:hover {
+  border-color: var(--chat-accent, #3b82f6);
+  color: var(--chat-accent, #3b82f6);
+  background: rgba(59,130,246,0.06);
+}
+
+/* Subject field editable look */
+.ldoc-email-subject-field .ldoc-email-field-value {
+  font-weight: 500;
+}
+
+/* Context menu for rephrase */
+.ldoc-email-ctx-menu {
+  position: fixed; z-index: 10000;
+  background: var(--chat-surface, #fff);
+  border: 1px solid var(--chat-border, #d1d5db);
+  border-radius: 8px; padding: 4px 0;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  min-width: 200px;
+}
+.cv2-dark .ldoc-email-ctx-menu { background: #1e293b; border-color: #334155; }
+.ldoc-email-ctx-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; font-size: 13px; cursor: pointer;
+  color: var(--chat-text, #374151);
+  transition: background 0.1s;
+}
+.ldoc-email-ctx-item:hover {
+  background: var(--chat-surface-alt, #f3f4f6);
+}
+.cv2-dark .ldoc-email-ctx-item:hover { background: rgba(255,255,255,0.06); }
+
+/* ══════════════════════════════════════════════════════════
+   Unified Attachment Preview Popover
+   Hover → interactive popover. Pin → stays open. Maximize → full screen.
+   ══════════════════════════════════════════════════════════ */
+
+
+
+
+/* When maximized, content children fill the available vertical space */
+
+
+
+/* Header bar */
+
+
+
+
+
+
+
+
+/* Content area */
+
+
+
+
+
+@keyframes cv2-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.cv2-spin { animation: cv2-spin 1s linear infinite; }
+
+/* Meta card fallback */
+
+
+/* Sheet / slide tabs */
+
+
+
+
+
+/* Table in preview */
+
+
+
+
+
+/* Floating window mode */
+
+
+
+
+/* Hide inner plugin headers and window button inside preview window */
+
+
+
+/* Email draft fills available space in windowed / maximized mode */
+
+/* Text doc: remove inline height cap in windowed/maximized mode */
+
+
+
+
+
+/* Maximize backdrop */
+
+
+
+/* ══════════════════════════════════════════════════════════
+   Rich Text Toolbar (shared: email drafts + Word docs)
+   ══════════════════════════════════════════════════════════ */
+.ldoc-rich-toolbar {
+  display: flex; align-items: center; gap: 1px; padding: 4px 8px;
+  border-bottom: 1px solid var(--chat-border, #e5e7eb);
+  background: var(--chat-surface-alt, #f9fafb);
+  flex-shrink: 0; flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 10;
+}
+.cv2-dark .ldoc-rich-toolbar { background: var(--chat-surface, #1e1e30); }
+.ldoc-rich-toolbar-btn {
+  background: none; border: none; cursor: pointer; padding: 4px;
+  border-radius: 4px; color: var(--chat-text-muted, #6b7280);
+  display: flex; align-items: center; transition: background 0.12s, color 0.12s;
+  position: relative;
+}
+.ldoc-rich-toolbar-btn:hover {
+  background: rgba(0,0,0,0.06); color: var(--chat-text, #1f2937);
+}
+.cv2-dark .ldoc-rich-toolbar-btn:hover { background: rgba(255,255,255,0.08); }
+.ldoc-rich-toolbar-btn.active {
+  background: rgba(var(--chat-accent-rgb, 59,130,246), 0.12);
+  color: var(--chat-accent, #3b82f6);
+}
+.ldoc-rich-toolbar-btn .material-icons { font-size: 18px; }
+.ldoc-rich-toolbar-sep {
+  width: 1px; height: 18px;
+  background: var(--chat-border, #e5e7eb); margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* Shared popup base (font size + more menu, appended to body with position:fixed in JS) */
+.ldoc-rich-popup {
+  z-index: 10000;
+  background: #fff; color: #1f2937;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  padding: 4px 0;
+}
+.ldoc-rich-popup.cv2-dark {
+  background: #1e293b; color: #e5e7eb;
+  border-color: #334155;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+
+/* ── Shared popup menu items (cv2PopupMenu) ──────────── */
+.ldoc-popup-menu { min-width: 180px; }
+.ldoc-popup-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 12px; border: none; background: none; text-align: left;
+  cursor: pointer; color: inherit; font-size: 13px;
+  white-space: nowrap; transition: background 0.1s;
+}
+.ldoc-popup-item:hover { background: rgba(59,130,246,0.08); }
+.ldoc-rich-popup.cv2-dark .ldoc-popup-item:hover { background: rgba(96,165,250,0.15); }
+.ldoc-popup-flag { font-size: 16px; line-height: 1; }
+.ldoc-popup-chevron { font-size: 14px; margin-left: auto; }
+.ldoc-popup-sep { height: 1px; margin: 4px 8px; background: #e5e7eb; }
+.ldoc-rich-popup.cv2-dark .ldoc-popup-sep { background: rgba(255,255,255,0.08); }
+/* Submenu */
+.ldoc-popup-sub { position: relative; }
+.ldoc-popup-sub-trigger { justify-content: flex-start; }
+.ldoc-popup-submenu {
+  display: none; position: absolute; left: 100%; top: -4px;
+  min-width: 170px;
+}
+.ldoc-popup-sub:hover > .ldoc-popup-submenu,
+.ldoc-popup-sub:focus-within > .ldoc-popup-submenu { display: block; }
+
+/* ── Prompt dialog (replaces window.prompt) ──────────── */
+.ldoc-prompt-backdrop {
+  position: fixed; inset: 0; z-index: 10010;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  animation: ldoc-prompt-fade-in 0.12s ease;
+}
+@keyframes ldoc-prompt-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.ldoc-prompt-dialog {
+  background: #fff; color: #1f2937;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.2);
+  padding: 20px 24px;
+  width: min(400px, 90vw);
+  animation: ldoc-prompt-slide-in 0.12s ease;
+}
+@keyframes ldoc-prompt-slide-in { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
+.ldoc-prompt-dialog.cv2-dark {
+  background: #1e293b; color: #e5e7eb;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+.ldoc-prompt-label {
+  font-size: 14px; font-weight: 600; margin-bottom: 12px;
+}
+.ldoc-prompt-input {
+  width: 100%; box-sizing: border-box;
+  padding: 8px 12px; font-size: 14px;
+  border: 1px solid #d1d5db; border-radius: 8px;
+  background: #fff; color: #1f2937;
+  outline: none; transition: border-color 0.15s;
+}
+.ldoc-prompt-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.2); }
+.ldoc-prompt-dialog.cv2-dark .ldoc-prompt-input {
+  background: #0f172a; color: #e5e7eb;
+  border-color: #475569;
+}
+.ldoc-prompt-dialog.cv2-dark .ldoc-prompt-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(96,165,250,0.2); }
+.ldoc-prompt-actions {
+  display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;
+}
+.ldoc-prompt-btn {
+  padding: 7px 18px; border-radius: 8px; border: none;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background 0.15s;
+}
+.ldoc-prompt-cancel {
+  background: #f3f4f6; color: #374151;
+}
+.ldoc-prompt-cancel:hover { background: #e5e7eb; }
+.ldoc-prompt-dialog.cv2-dark .ldoc-prompt-cancel { background: rgba(255,255,255,0.08); color: #e5e7eb; }
+.ldoc-prompt-dialog.cv2-dark .ldoc-prompt-cancel:hover { background: rgba(255,255,255,0.12); }
+.ldoc-prompt-ok {
+  background: #3b82f6; color: #fff;
+}
+.ldoc-prompt-ok:hover { background: #2563eb; }
+
+/* Font size dropdown */
+.ldoc-rich-size-menu { min-width: 60px; max-height: 240px; overflow-y: auto; font-size: 12px; }
+.ldoc-rich-size-option {
+  display: block; width: 100%; padding: 5px 10px; border: none;
+  background: none; text-align: left; cursor: pointer; font-size: 12px;
+  color: inherit;
+}
+.ldoc-rich-size-option:hover { background: rgba(59,130,246,0.08); }
+.cv2-dark .ldoc-rich-size-option:hover { background: rgba(96,165,250,0.15); }
+
+/* More options dropdown — now uses shared cv2PopupMenu (ldoc-popup-item) */
+
+/* Image resize handles */
+.ldoc-img-resize-handle {
+  position: absolute; width: 8px; height: 8px;
+  background: var(--chat-accent, #3b82f6);
+  border: 1px solid #fff; border-radius: 2px;
+  z-index: 1; box-sizing: border-box;
+}
+.ldoc-img-resize-handle--nw { top: -4px; left: -4px; cursor: nwse-resize; }
+.ldoc-img-resize-handle--ne { top: -4px; right: -4px; cursor: nesw-resize; }
+.ldoc-img-resize-handle--sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
+.ldoc-img-resize-handle--se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+.ldoc-img-resize-selected {
+  outline: 2px solid var(--chat-accent, #3b82f6);
+  outline-offset: 1px; position: relative;
+}
+/* Image delete button (overlay on resize wrapper) */
+.ldoc-img-delete-btn {
+  position: absolute; top: -8px; right: -8px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #dc2626; color: #fff; font-size: 14px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; line-height: 1; z-index: 2;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.ldoc-img-delete-btn:hover { background: #b91c1c; }
+/* Broken images (e.g. cid: refs) — give them a visible clickable area */
+.ldoc-img-broken {
+  min-width: 80px; min-height: 40px;
+  display: inline-block;
+  border: 1px dashed var(--chat-border, #d1d5db);
+  background: var(--chat-surface-alt, #f9fafb);
+}
+.cv2-dark .ldoc-img-broken {
+  border-color: #4b5563;
+  background: rgba(255,255,255,0.04);
+}
+
+/* Signature block (non-editable, inserted from config) */
+.ldoc-email-signature {
+  border-top: 1px solid var(--chat-border, #e5e7eb);
+  margin-top: 16px; padding-top: 12px;
+  color: var(--chat-text-muted, #6b7280);
+  font-size: 13px;
+  cursor: default;
+}
+
+/* Text doc editable state */
+.ldoc-text[contenteditable="true"], .ldoc-word[contenteditable="true"] { cursor: text; }
+.ldoc-text[contenteditable="true"]:focus, .ldoc-word[contenteditable="true"]:focus { outline: none; }
+.ldoc-text[contenteditable="true"] img, .ldoc-word[contenteditable="true"] img { max-width: 100%; height: auto; }
+
+/* Inline charts in text_doc + email editable areas */
+.ldoc-inline-chart {
+  margin: 12px 0;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+  min-height: 100px;
+  cursor: pointer;
+}
+.ldoc-inline-chart[data-hydrated] {
+  border: 1px solid var(--chat-border, #e5e7eb);
+}
+#chat-app.cv2-dark .ldoc-inline-chart[data-hydrated] {
+  border-color: var(--chat-border, #374151);
+}
+
+/* ═══════════════════════════════════════════════════════
+   AI Editing — context menu, diff panel, ghost text, task input
+   ═══════════════════════════════════════════════════════ */
+
+/* Context menu now uses shared cv2PopupMenu (see ldoc-popup-* in popup base section) */
+
+/* Loading indicator (body-appended, hardcoded colors) */
+.ldoc-ai-ctx-loading {
+  position: fixed; z-index: 10001;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px; padding: 10px 16px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  font-size: 13px; color: #6b7280;
+  display: flex; align-items: center; gap: 8px;
+}
+.ldoc-ai-ctx-loading.cv2-dark {
+  background: #1e293b; color: #9ca3af;
+  border-color: #334155;
+}
+
+/* Diff panel — .cv2-dark applied directly on panel (body-appended) */
+.ldoc-ai-diff-panel {
+  position: fixed; z-index: 10002;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+  width: min(640px, 90vw);
+  max-height: 60vh;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  color: #374151;
+}
+.ldoc-ai-diff-panel.cv2-dark {
+  background: #1e293b; color: #e5e7eb;
+  border-color: #334155;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+}
+.ldoc-ai-diff-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 13px; font-weight: 600;
+  color: inherit;
+  cursor: grab; user-select: none;
+}
+.ldoc-ai-diff-panel.cv2-dark .ldoc-ai-diff-header { border-color: #334155; }
+.ldoc-ai-diff-actions { display: flex; gap: 6px; }
+.ldoc-ai-diff-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 12px; border-radius: 6px; border: none;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background 0.15s;
+}
+.ldoc-ai-diff-accept {
+  background: #22c55e; color: #fff;
+}
+.ldoc-ai-diff-accept:hover { background: #16a34a; }
+.ldoc-ai-diff-reject {
+  background: #f3f4f6; color: #6b7280;
+}
+.ldoc-ai-diff-reject:hover { background: rgba(0,0,0,0.08); }
+.ldoc-ai-diff-panel.cv2-dark .ldoc-ai-diff-reject { background: rgba(255,255,255,0.08); color: #e5e7eb; }
+.ldoc-ai-diff-panel.cv2-dark .ldoc-ai-diff-reject:hover { background: rgba(255,255,255,0.12); }
+
+.ldoc-ai-diff-body {
+  display: flex; overflow: auto; flex: 1;
+}
+.ldoc-ai-diff-col {
+  flex: 1; background: #fff; padding: 10px 14px;
+  min-width: 0;
+}
+.ldoc-ai-diff-col + .ldoc-ai-diff-col {
+  border-left: 1px solid #e5e7eb;
+}
+.ldoc-ai-diff-panel.cv2-dark .ldoc-ai-diff-col { background: #1e293b; }
+.ldoc-ai-diff-panel.cv2-dark .ldoc-ai-diff-col + .ldoc-ai-diff-col { border-color: #334155; }
+.ldoc-ai-diff-col-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  color: #9ca3af;
+  margin-bottom: 8px;
+}
+.ldoc-ai-diff-content {
+  font-size: 14px; line-height: 1.6;
+  color: inherit;
+  white-space: pre-wrap; word-break: break-word;
+}
+.ldoc-ai-diff-removed {
+  background: rgba(239,68,68,0.15); color: #991b1b;
+  text-decoration: line-through; border-radius: 2px; padding: 0 2px;
+}
+.ldoc-ai-diff-panel.cv2-dark .ldoc-ai-diff-removed { background: rgba(239,68,68,0.2); color: #fca5a5; }
+.ldoc-ai-diff-added {
+  background: rgba(34,197,94,0.15); color: #166534;
+  border-radius: 2px; padding: 0 2px;
+}
+.ldoc-ai-diff-panel.cv2-dark .ldoc-ai-diff-added { background: rgba(34,197,94,0.15); color: #86efac; }
+
+/* Ghost text (type-ahead) — inline, single-line only to prevent vertical shift */
+.ldoc-ghost-text {
+  display: inline;
+  white-space: nowrap;
+  color: var(--chat-text-muted, #9ca3af);
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+}
+.cv2-dark .ldoc-ghost-text { color: rgba(255,255,255,0.3); }
+
+/* AI Task input bar */
+.ldoc-ai-task-input {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  background: var(--chat-surface-alt, #f9fafb);
+  border-bottom: 1px solid var(--chat-border, #e5e7eb);
+}
+.cv2-dark .ldoc-ai-task-input { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.06); }
+.ldoc-ai-task-field {
+  flex: 1; border: 1px solid var(--chat-border, #d1d5db);
+  border-radius: 6px; padding: 6px 10px;
+  font-size: 13px; background: var(--chat-surface, #fff);
+  color: var(--chat-text, #374151);
+  outline: none;
+}
+.ldoc-ai-task-field:focus { border-color: var(--chat-accent, #3b82f6); box-shadow: 0 0 0 2px rgba(59,130,246,0.15); }
+.cv2-dark .ldoc-ai-task-field { background: rgba(255,255,255,0.05); color: var(--chat-text, #e5e7eb); border-color: rgba(255,255,255,0.1); }
+.ldoc-ai-task-go {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 6px; border: none;
+  background: var(--chat-accent, #3b82f6); color: #fff; cursor: pointer;
+  transition: background 0.15s;
+}
+.ldoc-ai-task-go:hover { background: #2563eb; }
+.ldoc-ai-task-btn { position: relative; }
+
+/* Spinner */
+.ldoc-ai-task-spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%;
+  animation: cv2-spin 0.6s linear infinite;
+}
+@keyframes cv2-spin { to { transform: rotate(360deg); } }
+
+/* Cancel button (inline in loading/task states) */
+.ldoc-ai-cancel-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; border: none;
+  background: rgba(0,0,0,0.08); color: var(--chat-text-muted, #6b7280);
+  cursor: pointer; margin-left: 8px; padding: 0;
+  transition: background 0.15s;
+}
+.ldoc-ai-cancel-btn:hover { background: rgba(239,68,68,0.15); color: #dc2626; }
+.cv2-dark .ldoc-ai-cancel-btn { background: rgba(255,255,255,0.08); color: var(--chat-text-muted, #9ca3af); }
+.cv2-dark .ldoc-ai-cancel-btn:hover { background: rgba(239,68,68,0.2); color: #f87171; }
+
+/* ══════════════════════════════════════════════════════════
+   Tables inside editable document areas
+   ══════════════════════════════════════════════════════════ */
+.ldoc-email-body-content table,
+.ldoc-text table,
+.ldoc-word table {
+  border-collapse: collapse; width: 100%; margin: 8px 0;
+  font-size: 13px;
+}
+.ldoc-email-body-content th, .ldoc-email-body-content td,
+.ldoc-text th, .ldoc-text td,
+.ldoc-word th, .ldoc-word td {
+  border: 1px solid var(--chat-border, #d1d5db);
+  padding: 6px 10px; text-align: left;
+}
+.ldoc-email-body-content th,
+.ldoc-text th,
+.ldoc-word th {
+  background: var(--chat-surface-alt, #f3f4f6); font-weight: 600;
+}
+.cv2-dark .ldoc-email-body-content th,
+.cv2-dark .ldoc-text th,
+.cv2-dark .ldoc-word th {
+  background: rgba(255,255,255,0.06);
+}
+.cv2-dark .ldoc-email-body-content th, .cv2-dark .ldoc-email-body-content td,
+.cv2-dark .ldoc-text th, .cv2-dark .ldoc-text td,
+.cv2-dark .ldoc-word th, .cv2-dark .ldoc-word td {
+  border-color: #374151;
+}
+
+/* ══════════════════════════════════════════════════════════
+   Rich MCP — Trust Prompt & Injected Message Badge
+   ══════════════════════════════════════════════════════════ */
+
+
+
+.ldoc-trust-prompt-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--chat-text);
+  margin-bottom: 8px;
+}
+
+.ldoc-trust-prompt-icon {
+  font-size: 18px;
+  color: var(--chat-accent);
+  flex-shrink: 0;
+}
+
+.ldoc-trust-prompt-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.ldoc-trust-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--chat-border);
+  background: transparent;
+  color: var(--chat-text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ldoc-trust-btn:hover {
+  background: var(--chat-sidebar-hover);
+}
+
+.ldoc-trust-btn-allow {
+  background: var(--chat-accent);
+  color: #fff;
+  border-color: var(--chat-accent);
+}
+
+.ldoc-trust-btn-allow:hover {
+  background: var(--chat-accent-hover);
+}
+
+.ldoc-trust-btn-always {
+  border-color: var(--chat-accent);
+  color: var(--chat-accent);
+}
+
+.ldoc-trust-btn-deny {
+  color: var(--chat-text-muted);
+}
+
+.ldoc-injected-badge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--chat-text-muted);
+  background: rgba(var(--chat-accent-rgb, 99, 102, 241), 0.08);
+  border: 1px solid rgba(var(--chat-accent-rgb, 99, 102, 241), 0.15);
+}
+
+/* Hide AI editing features on mobile */
+@media (max-width: 768px) {
+  .ldoc-popup-menu,
+  .ldoc-ai-diff-panel,
+  .ldoc-ai-ctx-loading,
+  .ldoc-ai-task-input,
+  .ldoc-ai-task-btn,
+  .ldoc-ghost-text { display: none !important; }
+}
+
+/* ── Kantini Inline Meal Cards (kantini_result plugin) ── */
+.kvi-container {
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--chat-bg-surface, #1a1c2e);
+    border: 1px solid var(--chat-border, rgba(255,255,255,0.06));
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+.kvi-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--chat-border, rgba(255,255,255,0.06));
+}
+.kvi-icon { font-size: 18px; }
+.kvi-title { font-size: 14px; font-weight: 600; color: var(--chat-text, #f3f4f6); }
+.kvi-subtitle { font-size: 11px; color: var(--chat-text-muted, #6b7280); margin-left: auto; }
+.kvi-meals { display: flex; flex-direction: column; gap: 1px; background: var(--chat-border, rgba(255,255,255,0.04)); }
+.kvi-meal {
+    display: flex; gap: 12px; padding: 10px 14px;
+    background: var(--chat-bg-surface, #1a1c2e);
+    align-items: flex-start;
+}
+.kvi-img {
+    width: 90px; height: 68px; border-radius: 6px;
+    overflow: hidden; flex-shrink: 0; position: relative;
+    background: #2a2c3e;
+}
+.kvi-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.kvi-ai {
+    position: absolute; top: 2px; right: 2px;
+    background: rgba(75,143,231,0.7); color: #fff;
+    font-size: 7px; font-weight: 700; font-style: normal;
+    padding: 0 3px; border-radius: 2px;
+}
+.kvi-bio {
+    position: absolute; top: 2px; left: 2px;
+    font-size: 9px; font-style: normal;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
+}
+.kvi-info { flex: 1; min-width: 0; }
+.kvi-type {
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--chat-text-muted, #6b7280);
+    margin-bottom: 1px;
+}
+.kvi-name {
+    font-size: 13px; font-weight: 600; color: var(--chat-text, #e5e7eb);
+    line-height: 1.25;
+}
+.kvi-desc {
+    font-size: 11px; color: var(--chat-text-muted, #9ca3af);
+    line-height: 1.25; margin-top: 2px;
+}
+.kvi-meta {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 4px; flex-wrap: wrap;
+}
+.kvi-kcal { font-size: 11px; font-weight: 600; color: var(--chat-accent, #4B8FE7); }
+.kvi-tag { font-size: 11px; }
+.kvi-tag-bio { color: #22c55e; font-size: 10px; font-weight: 600; }
+.kvi-allergens {
+    font-size: 9px; color: var(--chat-text-muted, #6b7280);
+    cursor: help;
+}
+.kvi-nutri-bar {
+    display: flex; height: 3px; border-radius: 2px;
+    overflow: hidden; margin-top: 4px; max-width: 120px;
+}
+
+.kvi-kw-select {
+    background: var(--chat-bg-input, #2a2c3e);
+    color: var(--chat-text, #f3f4f6);
+    border: 1px solid var(--chat-border, rgba(255,255,255,0.1));
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+}
+.kvi-kw-select:hover { border-color: rgba(255,255,255,0.2); }
+.kvi-kw-select:focus { border-color: var(--chat-accent, #6366f1); }
+
+.kvi-no-menu {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--chat-text-muted, #6b7280);
+    font-size: 14px;
+    font-style: italic;
+}
+
+/* ── Kantini Likes ──────────────────────────────── */
+
+.kvi-likes {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    margin-left: auto; flex-shrink: 0;
+    align-self: center;
+}
+.kvi-like-btn {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px; padding: 1px 6px; height: 20px;
+    font-size: 11px; cursor: pointer; display: inline-flex;
+    align-items: center; gap: 2px; color: #6b7280;
+    transition: background .15s, border-color .15s;
+    user-select: none;
+}
+.kvi-like-btn:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.12); }
+.kvi-like-own {
+    background: rgba(75,143,231,0.12);
+    border-color: rgba(75,143,231,0.3);
+    color: #93b4f0;
+}
+.kvi-like-own:hover { background: rgba(75,143,231,0.2); }
+.kvi-like-add { opacity: 0.25; font-size: 10px; transition: opacity .15s; }
+.kvi-meal:hover .kvi-like-add, .kv-cell:hover .kvi-like-add { opacity: 0.7; }
+.kvi-like-count { font-size: 10px; font-weight: 600; }
+
+.kvi-emoji-picker {
+    position: fixed; z-index: 300003;
+    background: var(--chat-surface, #1c1f3a);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; padding: 4px;
+    display: flex; gap: 2px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    animation: kvi-picker-in .12s ease-out;
+}
+@keyframes kvi-picker-in { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: none; } }
+.kvi-emoji-opt {
+    font-size: 20px; cursor: pointer;
+    padding: 4px 6px; border-radius: 6px;
+    transition: background .1s;
+}
+.kvi-emoji-opt:hover { background: rgba(255,255,255,0.1); }
