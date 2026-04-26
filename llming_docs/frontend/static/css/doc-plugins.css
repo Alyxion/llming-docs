@@ -305,6 +305,411 @@
   background: rgba(var(--chat-accent-rgb), 0.04);
 }
 
+/* ── Table editor: sheet tabs, editable cells, context menu ─── */
+
+.ldoc-table-wrapper {
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  /* Fill the vertical space of the enclosing plugin block so the sheet
+     tabs sit right below the table, not halfway up the pane with a big
+     empty area below. Works inside the workspace (where the parent is
+     a flex column with a real height) AND inline in chat messages
+     (where content-height is desired); ``auto`` + ``min-height: 0``
+     gives flex-grow when there's parent room and natural sizing when
+     there isn't. */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The scrollable table owns the growth so the tab strip below it is
+   always pinned to the visible bottom, not scrolled off. */
+.ldoc-table-wrapper > .ldoc-table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ldoc-table-scroll {
+  overflow: auto;
+  border: 1px solid var(--chat-border);
+  border-radius: 4px;
+}
+
+.ldoc-table-editable {
+  background: var(--chat-bg);
+}
+
+/* Editable cells — focus ring uses the accent colour so it themes. */
+.ldoc-col-label {
+  outline: none;
+  display: inline-block;
+  min-width: 4ch;  /* remain clickable even when the header is empty */
+}
+
+.ldoc-col-label:focus {
+  background: rgba(var(--chat-accent-rgb), 0.10);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--chat-accent);
+}
+
+/* Empty cells must stay visible and selectable. Without a minimum the
+   column collapses to 0 px and the user can't click into it to start
+   typing. 80 px matches the typical first-click target in a spreadsheet. */
+.ldoc-table-editable th,
+.ldoc-table-editable td {
+  min-width: 80px;
+}
+
+.ldoc-table-editable td[contenteditable="true"] {
+  outline: none;
+  cursor: text;
+  /* Prevent a zero-height row when every cell is empty. */
+  min-height: 22px;
+}
+
+.ldoc-table-editable td[contenteditable="true"]:focus {
+  background: rgba(var(--chat-accent-rgb), 0.10);
+  box-shadow: inset 0 0 0 1px var(--chat-accent);
+}
+
+/* ── Sheet tab strip — Excel-style, at the BOTTOM, subtle ─────── */
+.ldoc-sheet-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  /* A single hairline separator above the tabs so they read as "below
+     the sheet" without looking like chunky top tabs. */
+  border-top: 1px solid var(--chat-border);
+  margin-top: 0;
+  padding: 0 2px;
+  overflow-x: auto;
+  font-size: 11px;
+  min-height: 22px;
+}
+
+.ldoc-sheet-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px 4px 12px;
+  color: var(--chat-text-muted);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--chat-border);
+  cursor: pointer;
+  max-width: 160px;
+  user-select: none;
+  letter-spacing: 0.01em;
+}
+
+.ldoc-sheet-tab:hover {
+  color: var(--chat-text);
+  background: rgba(var(--chat-accent-rgb), 0.05);
+}
+
+.ldoc-sheet-tab.active {
+  color: var(--chat-text);
+  background: var(--chat-surface);
+  /* Inset the active-tab accent on the top edge so it reads "this
+     is the current sheet" without a chunky border. */
+  box-shadow: inset 0 1px 0 0 var(--chat-accent);
+  font-weight: 500;
+}
+
+.ldoc-sheet-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  outline: none;
+}
+
+.ldoc-sheet-add {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--chat-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 10px;
+  font-family: inherit;
+  align-self: center;
+}
+
+.ldoc-sheet-add:hover {
+  color: var(--chat-text);
+  background: rgba(var(--chat-accent-rgb), 0.08);
+}
+
+/* ── Context-menu items (cells, headers, sheet tabs) ─────────── */
+/* The ``.ldoc-ctx-menu`` container itself is styled by the shared
+   popover recipe above — items + separator just get their item-level
+   treatment here. */
+
+.ldoc-ctx-item {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  padding: 8px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.ldoc-ctx-item:hover:not(:disabled) {
+  background: var(
+    --ldoc-popover-item-hover,
+    rgba(var(--chat-accent-rgb, 99, 102, 241), 0.14)
+  );
+}
+
+.ldoc-ctx-item:disabled {
+  color: var(--ldoc-popover-text-muted, var(--chat-text-muted, #9ca3af));
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ldoc-ctx-item.danger {
+  color: var(--ldoc-danger, #e25353);
+}
+
+.ldoc-ctx-item.danger:hover:not(:disabled) {
+  background: var(--ldoc-danger-bg, rgba(226, 83, 83, 0.14));
+}
+
+.ldoc-ctx-sep {
+  height: 1px;
+  background: var(--ldoc-popover-border, var(--chat-border, rgba(255,255,255,0.10)));
+  margin: 4px 2px;
+}
+
+/* ── Quasar-style confirm dialog ─────────────────────────────
+ *
+ * Modal overlay + centered card. Reuses the same ``--ldoc-popover-*``
+ * token palette as popovers so hosts re-skin both at once. No framework
+ * dependency; visually matches QDialog + QCard + QBtn stack. */
+
+.ldoc-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  background: rgba(0, 0, 0, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+  animation: ldoc-dialog-fade 140ms ease-out;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  --ldoc-popover-bg: #ffffff;
+  --ldoc-popover-text: #1f2937;
+  --ldoc-popover-text-muted: #6b7280;
+  --ldoc-popover-border: #e5e7eb;
+  --ldoc-popover-item-hover: rgba(99, 102, 241, 0.12);
+}
+
+.ldoc-dialog-overlay.ldoc-dark {
+  --ldoc-popover-bg: #1e1e30;
+  --ldoc-popover-text: #e5e7eb;
+  --ldoc-popover-text-muted: #9ca3af;
+  --ldoc-popover-border: rgba(255, 255, 255, 0.10);
+  --ldoc-popover-item-hover: rgba(99, 102, 241, 0.20);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+@keyframes ldoc-dialog-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.ldoc-dialog-card {
+  min-width: 320px;
+  max-width: 480px;
+  width: calc(100vw - 64px);
+  background: var(--ldoc-popover-bg);
+  color: var(--ldoc-popover-text);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  animation: ldoc-dialog-rise 160ms cubic-bezier(.2, .9, .3, 1);
+}
+
+@keyframes ldoc-dialog-rise {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to   { transform: translateY(0)    scale(1);    opacity: 1; }
+}
+
+.ldoc-dialog-body { padding: 22px 22px 16px 22px; }
+
+.ldoc-dialog-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: 10px;
+}
+
+.ldoc-dialog-message {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ldoc-popover-text-muted);
+}
+
+.ldoc-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 14px 14px 14px;
+}
+
+.ldoc-dialog-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--ldoc-popover-text);
+  padding: 8px 14px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 120ms;
+}
+
+.ldoc-dialog-btn:hover { background: var(--ldoc-popover-item-hover); }
+
+.ldoc-dialog-btn-primary { color: #6366f1; }
+.ldoc-dialog-btn-primary:hover { background: rgba(99, 102, 241, 0.12); }
+
+.ldoc-dialog-btn-danger { color: #e25353; }
+.ldoc-dialog-btn-danger:hover { background: rgba(226, 83, 83, 0.12); }
+
+.ldoc-dialog-btn:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.55);
+  outline-offset: 1px;
+}
+
+/* ── Shared popover recipe (llming-docs) ─────────────────────
+ *
+ * All floating menus that pop out of the editor — download format
+ * picker, cell/row/column context menu, sheet-tab context menu — use
+ * the same visual recipe.
+ *
+ * Popovers are appended to ``document.body`` so they can escape
+ * overflow:hidden containers; that also means they fall OUTSIDE any
+ * ``#chat-app.cv2-dark`` scope that supplies the ``--chat-*`` vars.
+ * We therefore define the colour tokens on the popover element itself,
+ * with an ``.ldoc-dark`` class flipping dark-mode values. Hosts can
+ * still override the ``--ldoc-popover-*`` variables globally to reskin.
+ */
+.ldoc-ctx-menu,
+.ldoc-download-menu {
+  position: fixed;
+  z-index: 10000;
+  /* Light-mode defaults — a host may override via --ldoc-popover-*. */
+  --ldoc-popover-bg: #ffffff;
+  --ldoc-popover-text: #1f2937;
+  --ldoc-popover-text-muted: #6b7280;
+  --ldoc-popover-border: #e5e7eb;
+  --ldoc-popover-item-hover: rgba(99, 102, 241, 0.12);
+  background: var(--ldoc-popover-bg);
+  color: var(--ldoc-popover-text);
+  border: 1px solid var(--ldoc-popover-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  padding: 6px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  /* Same system-font stack used by the chat app so popovers appended to
+   * <body> don't fall back to the browser's default (serif on macOS). */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+               'Helvetica Neue', Arial, sans-serif;
+  font-size: 13px;
+  user-select: none;
+}
+
+.ldoc-ctx-menu.ldoc-dark,
+.ldoc-download-menu.ldoc-dark {
+  --ldoc-popover-bg: #1e1e30;
+  --ldoc-popover-text: #e5e7eb;
+  --ldoc-popover-text-muted: #9ca3af;
+  --ldoc-popover-border: rgba(255, 255, 255, 0.10);
+  --ldoc-popover-item-hover: rgba(99, 102, 241, 0.20);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.ldoc-download-menu-item {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  padding: 8px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.ldoc-download-menu-item:hover {
+  background: var(
+    --ldoc-popover-item-hover,
+    rgba(var(--chat-accent-rgb, 99, 102, 241), 0.14)
+  );
+}
+
+/* ── Source viewer panel (``data_object`` / "{…}" button) ── */
+
+.cv2-doc-source-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  max-height: min(60vh, 520px);
+  border: 1px solid var(--chat-border);
+  border-radius: 6px;
+  background: var(--chat-surface);
+  overflow: hidden;
+}
+
+.cv2-doc-source-panel pre {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 12px 14px 14px 14px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--chat-text);
+  white-space: pre;
+  tab-size: 2;
+}
+
+.cv2-doc-source-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  appearance: none;
+  border: 1px solid var(--chat-border);
+  background: var(--chat-bg);
+  color: var(--chat-text);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.cv2-doc-source-copy:hover {
+  background: rgba(var(--chat-accent-rgb), 0.10);
+}
+
 /* ── LaTeX Plugin ──────────────────────────────────────── */
 
 .ldoc-latex {

@@ -100,21 +100,40 @@ On validation failure, returns `{"error": "validation_failed", "errors": [...]}`
 
 ### Path language
 
-Slash-separated, resolves against `doc.data`:
+The path language is **type-aware**. Tables (XLSX) use openpyxl-native A1
+addressing; everything else uses JSON-path navigation against `doc.data`.
+
+**Non-table types** — slash-separated paths against `doc.data`:
 
 - `slides/s1/title` — array lookup by `id` field, then field access.
 - `slides/0/elements/2/content` — array lookup by numeric index, nested.
-- `sheets/Q1/rows/3/revenue` — array lookup by `name` field (fallback after `id`).
 - `sections/abc123/content` — section by id.
 - `to`, `subject`, `body_html` — top-level fields (email).
 - `data/0/x` — first Plotly trace, x-values.
+
+**Table type** — sheets are referenced by 0-based **index** (not name),
+cells by A1 address. The full op vocabulary lives in `xlsx_ops.py`; common
+shapes:
+
+- `sheets/0/cells/B3/value` — cell B3 on the first sheet.
+- `sheets/0/cells/B3/font` — font dict (bold/italic/color/size).
+- `sheets/0/cells/B3/fill` — background fill.
+- `sheets/0/rows/-` (`add`, value=list) — append a row.
+- `sheets/0/columns/-` (`add`, value=string) — append a column header.
+- `sheets/0/columns` (`add`, position=N) — insert column at position N.
+- `bulk_set sheets/0/range/A1` with `values: [[...], ...]` — drop a 2D
+  block. Cheaper per token than per-cell sets for big tables.
+
+Legacy column-name paths like `sheets/Q1/rows/3/revenue` are gone — the
+dispatcher will raise `XlsxOpError` if the LLM emits them.
 
 ### Operations
 
 - **`set`** — replace value at path.
 - **`add`** — insert; `position` specifies the index (defaults to end).
 - **`remove`** — delete.
-- **`move`** — reorder; `position` is the destination index.
+- **`move`** — reorder (non-table only); `position` is the destination index.
+- **`bulk_set`** — table only; `values` is a 2D array placed at `range/<A1>`.
 
 Operations are atomic per call — if any op fails validation or path resolution, none are applied. The tool returns `{"error": "update_failed", "errors": [...]}` with per-op details.
 

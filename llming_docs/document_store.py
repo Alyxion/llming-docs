@@ -12,6 +12,31 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
+# ---------------------------------------------------------------------------
+# Legacy-table migration (JSON {sheets: ...} → XLSX {xlsx_b64: ...})
+# ---------------------------------------------------------------------------
+
+
+def _migrate_table_data_if_legacy(data: Any) -> Any:
+    """Convert a legacy JSON-shape table payload to ``{xlsx_b64: "..."}``.
+
+    No-op when ``data`` already carries ``xlsx_b64`` or doesn't look like
+    a legacy table shape. Imported lazily so the document store doesn't
+    take a hard dependency on openpyxl when the host happens to use only
+    non-table doc types.
+    """
+    from llming_docs.sheet.xlsx_migrate import (
+        is_legacy_json_table,
+        migrate_legacy_json_to_workbook,
+    )
+    from llming_docs.sheet.xlsx_storage import workbook_to_b64
+
+    if not is_legacy_json_table(data):
+        return data
+    wb = migrate_legacy_json_to_workbook(data)
+    return {"xlsx_b64": workbook_to_b64(wb)}
+
+
 class Document(BaseModel):
     """A document within a chat conversation."""
     id: str = Field(default_factory=lambda: uuid4().hex[:12])
@@ -82,6 +107,16 @@ class DocumentSessionStore:
                 existing = self._docs.get(id)
             if existing is not None:
                 return existing
+
+        # Normalize table data to the canonical XLSX storage shape. Catches
+        # legacy ``{sheets: [...]}`` payloads coming from older clients
+        # (e.g. the workspace "+ new doc" button's template) so every
+        # ``table`` doc in the store is XLSX-backed regardless of how it
+        # was created. New ``{xlsx_b64: ...}`` data is left untouched.
+        if type == "table":
+            data = _migrate_table_data_if_legacy(data)
+            # XLSX bytes are the validation — skip the JSON-shape validator.
+            skip_validation = True
 
         if not skip_validation and data is not None:
             from llming_docs.validators import validate_document
@@ -160,7 +195,11 @@ class DocumentSessionStore:
         return doc
 
     def undo(self, doc_id: str) -> Optional[Document]:
-        """Undo the most recent change to a document. Returns restored Document or None."""
+        """Undo the most recent change to a document. Returns restored Document or None.
+
+        Pushes the current state onto the history's redo stack so a
+        subsequent :meth:`redo` can step forward again.
+        """
         with self._lock:
             doc = self._docs.get(doc_id)
             if not doc:
@@ -170,13 +209,59 @@ class DocumentSessionStore:
             if not history:
                 return None
 
-            result = history.undo()
+            # Pass the *current* state so redo can return us to it.
+            result = history.undo(
+                current_data=doc.data, current_version=doc.version,
+            )
             if result is None:
                 return None
 
             restored_data, restored_version = result
             doc.data = restored_data
             doc.version += 1  # undo itself is a new version
+            doc.updated_at = time.time()
+
+        self._notify("doc_updated", doc)
+        return doc
+
+    def redo(self, doc_id: str) -> Optional[Document]:
+        """Step forward through the history's redo stack. Returns the
+        restored Document or None when there's nothing to redo (no
+        previous undo, or a fresh edit cleared the forward branch).
+
+        We treat redo as the symmetric inverse of undo: push the current
+        (undone) state back onto the undo stack via
+        :meth:`DocumentHistory.record`, then apply the forward state
+        retrieved from the redo stack. This means a subsequent undo will
+        revert the redo cleanly — without us having to special-case
+        anything in :meth:`undo`.
+        """
+        with self._lock:
+            doc = self._docs.get(doc_id)
+            if not doc:
+                return None
+            history = self._histories.get(doc_id)
+            if not history:
+                return None
+            forward = history.redo()
+            if forward is None:
+                return None
+            forward_data, _forward_version = forward
+
+            # Re-push the current state so undo can come back to it.
+            # ``record`` would normally clear the redo stack; we save and
+            # restore it around the call to preserve any deeper redo
+            # entries the user might still want to walk.
+            saved_redo = list(history._redo)
+            history.record(
+                old_data=doc.data,
+                new_data=forward_data,
+                version=doc.version + 1,
+            )
+            history._redo = saved_redo
+
+            doc.data = forward_data
+            doc.version += 1
             doc.updated_at = time.time()
 
         self._notify("doc_updated", doc)
@@ -200,6 +285,11 @@ class DocumentSessionStore:
         Replaces the current set: clears existing docs before loading. This makes
         conversation switches clean — stale docs from the previous conversation
         don't leak into the new one.
+
+        ``table`` docs whose ``data`` is the legacy ``{sheets: [...]}``
+        JSON shape are migrated **on the fly** to the canonical XLSX
+        (``{xlsx_b64: "..."}``). The migration runs once per legacy doc;
+        the next time the doc is saved, the JSON shape is gone forever.
         """
         with self._lock:
             self._docs.clear()
@@ -207,6 +297,8 @@ class DocumentSessionStore:
             for d in docs_data:
                 doc = Document(**d)
                 doc.type = self._TYPE_ALIASES.get(doc.type, doc.type)
+                if doc.type == "table":
+                    doc.data = _migrate_table_data_if_legacy(doc.data)
                 self._docs[doc.id] = doc
 
     def clear(self) -> None:

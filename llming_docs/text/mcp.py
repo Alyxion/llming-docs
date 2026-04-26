@@ -1,5 +1,26 @@
-"""TextDocMCP -- in-process MCP server for editing text documents."""
+"""TextDocMCP -- in-process MCP server for editing text documents.
 
+Mutation-handler contract
+-------------------------
+Every handler that changes the document MUST work on a deep copy of
+``doc.data`` and only hand the copy to ``store.update``. Mutating
+``doc.data`` in place breaks three things at once:
+
+  * validation rollback — ``store.update`` rejects via
+    ``validate_document``, but the live doc is already corrupt;
+  * history capture — ``store.update`` does ``copy.deepcopy(doc.data)``
+    to remember the *old* state, but the mutation already happened, so
+    undo would no-op;
+  * the response shape — ``store.update`` returns ``list[ValidationError]``
+    or ``None`` on failure; ``updated.version`` then crashes with
+    ``AttributeError`` and the LLM sees a 500 instead of a structured
+    error it can self-correct from.
+
+The :func:`_persist_data_change` helper at the bottom enforces this for
+every handler — call it instead of touching ``store.update`` directly.
+"""
+
+import copy
 import json
 import logging
 from typing import Any, Dict, List
@@ -302,19 +323,22 @@ class TextDocMCP(InProcessMCPServer):
                 return json.dumps({"error": "Document not found"})
             if doc.type not in ("text_doc", "word"):
                 return json.dumps({"error": f"Document is type '{doc.type}', not 'text_doc'"})
-            data = doc.data or {}
-            sections = data.get("sections", [])
+            # Deep-copy before mutation — see module docstring for the
+            # reasoning. ``working_data`` is the only place we touch.
+            working_data = copy.deepcopy(doc.data or {})
+            sections = working_data.get("sections", [])
             idx, section = self._find_section(sections, arguments["section_id"])
             if section is None:
                 return json.dumps({"error": f"Section '{arguments['section_id']}' not found"})
             section.update(arguments["updates"])
-            updated = self._store.update(doc.id, data=data)
-            return json.dumps({
-                "status": "section_updated",
-                "document_id": doc.id,
-                "section_id": arguments["section_id"],
-                "version": updated.version,
-            })
+            return _persist_data_change(
+                self._store, doc.id, working_data,
+                success_payload={
+                    "status": "section_updated",
+                    "document_id": doc.id,
+                    "section_id": arguments["section_id"],
+                },
+            )
 
         elif name == "text_doc_add_section":
             doc = self._store.get(arguments["document_id"])
@@ -322,10 +346,10 @@ class TextDocMCP(InProcessMCPServer):
                 return json.dumps({"error": "Document not found"})
             if doc.type not in ("text_doc", "word"):
                 return json.dumps({"error": f"Document is type '{doc.type}', not 'text_doc'"})
-            data = doc.data or {}
-            if "sections" not in data:
-                data["sections"] = []
-            sections = data["sections"]
+            working_data = copy.deepcopy(doc.data or {})
+            if "sections" not in working_data:
+                working_data["sections"] = []
+            sections = working_data["sections"]
             from uuid import uuid4
             sec_type = arguments["type"]
             new_section: Dict[str, Any] = {
@@ -346,14 +370,15 @@ class TextDocMCP(InProcessMCPServer):
                 sections.insert(position, new_section)
             else:
                 sections.append(new_section)
-            updated = self._store.update(doc.id, data=data)
-            return json.dumps({
-                "status": "section_added",
-                "document_id": doc.id,
-                "section_id": new_section["id"],
-                "section_count": len(sections),
-                "version": updated.version,
-            })
+            return _persist_data_change(
+                self._store, doc.id, working_data,
+                success_payload={
+                    "status": "section_added",
+                    "document_id": doc.id,
+                    "section_id": new_section["id"],
+                    "section_count": len(sections),
+                },
+            )
 
         elif name == "text_doc_delete_section":
             doc = self._store.get(arguments["document_id"])
@@ -361,20 +386,21 @@ class TextDocMCP(InProcessMCPServer):
                 return json.dumps({"error": "Document not found"})
             if doc.type not in ("text_doc", "word"):
                 return json.dumps({"error": f"Document is type '{doc.type}', not 'text_doc'"})
-            data = doc.data or {}
-            sections = data.get("sections", [])
+            working_data = copy.deepcopy(doc.data or {})
+            sections = working_data.get("sections", [])
             idx, section = self._find_section(sections, arguments["section_id"])
             if section is None:
                 return json.dumps({"error": f"Section '{arguments['section_id']}' not found"})
             sections.pop(idx)
-            updated = self._store.update(doc.id, data=data)
-            return json.dumps({
-                "status": "section_deleted",
-                "document_id": doc.id,
-                "deleted_section_id": arguments["section_id"],
-                "section_count": len(sections),
-                "version": updated.version,
-            })
+            return _persist_data_change(
+                self._store, doc.id, working_data,
+                success_payload={
+                    "status": "section_deleted",
+                    "document_id": doc.id,
+                    "deleted_section_id": arguments["section_id"],
+                    "section_count": len(sections),
+                },
+            )
 
         elif name == "text_doc_move_section":
             doc = self._store.get(arguments["document_id"])
@@ -382,8 +408,8 @@ class TextDocMCP(InProcessMCPServer):
                 return json.dumps({"error": "Document not found"})
             if doc.type not in ("text_doc", "word"):
                 return json.dumps({"error": f"Document is type '{doc.type}', not 'text_doc'"})
-            data = doc.data or {}
-            sections = data.get("sections", [])
+            working_data = copy.deepcopy(doc.data or {})
+            sections = working_data.get("sections", [])
             idx, section = self._find_section(sections, arguments["section_id"])
             if section is None:
                 return json.dumps({"error": f"Section '{arguments['section_id']}' not found"})
@@ -391,14 +417,15 @@ class TextDocMCP(InProcessMCPServer):
             new_pos = arguments["new_position"]
             new_pos = max(0, min(new_pos, len(sections)))
             sections.insert(new_pos, section)
-            updated = self._store.update(doc.id, data=data)
-            return json.dumps({
-                "status": "section_moved",
-                "document_id": doc.id,
-                "section_id": arguments["section_id"],
-                "new_position": new_pos,
-                "version": updated.version,
-            })
+            return _persist_data_change(
+                self._store, doc.id, working_data,
+                success_payload={
+                    "status": "section_moved",
+                    "document_id": doc.id,
+                    "section_id": arguments["section_id"],
+                    "new_position": new_pos,
+                },
+            )
 
         elif name == "text_doc_search":
             doc = self._store.get(arguments["document_id"])
@@ -427,3 +454,44 @@ class TextDocMCP(InProcessMCPServer):
             })
 
         return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+def _persist_data_change(
+    store: DocumentSessionStore,
+    doc_id: str,
+    new_data: Dict[str, Any],
+    success_payload: Dict[str, Any],
+) -> str:
+    """Write ``new_data`` to ``doc_id`` and serialize a result for the LLM.
+
+    Centralises the three failure modes ``store.update`` can return so the
+    response shape stays consistent and never crashes:
+
+      * ``Document``  — success; merge ``version`` into ``success_payload``.
+      * ``list[ValidationError]`` — validation rejected; surface as a
+        structured ``validation_failed`` payload the LLM can read and retry.
+      * ``None``       — doc was deleted concurrently between read & write.
+
+    The caller is responsible for handing in a *deep copy* of doc.data so
+    that a validation failure here doesn't leave the live doc corrupt.
+    """
+    result = store.update(doc_id, data=new_data)
+    if result is None:
+        return json.dumps({
+            "error": "document_not_found",
+            "message": f"Document '{doc_id}' disappeared during update",
+            "hint": "The document may have been deleted concurrently.",
+        })
+    if isinstance(result, list):
+        return json.dumps({
+            "error": "validation_failed",
+            "errors": [
+                {"code": e.code, "message": e.message,
+                 "hint": e.hint, "path": e.path}
+                for e in result
+            ],
+            "hint": "Batch was rolled back. Fix issues and retry.",
+        })
+    payload = dict(success_payload)
+    payload["version"] = result.version
+    return json.dumps(payload)

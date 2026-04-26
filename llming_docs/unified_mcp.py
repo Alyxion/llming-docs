@@ -280,36 +280,30 @@ def _search_strings(data: Any, query: str, prefix: str = "") -> List[Dict[str, s
 # ---------------------------------------------------------------------------
 
 def _summarize_table(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Structural summary for table documents."""
-    if "sheets" in data:
-        sheets = []
-        for sheet in data["sheets"]:
-            columns = sheet.get("columns", [])
-            col_names = []
-            for c in columns:
-                if isinstance(c, dict):
-                    col_names.append(c.get("key", c.get("label", "?")))
-                elif isinstance(c, str):
-                    col_names.append(c)
-            sheets.append({
-                "name": sheet.get("name", ""),
-                "columns": col_names,
-                "row_count": len(sheet.get("rows", [])),
-            })
-        return {"type": "table", "multi_sheet": True, "sheets": sheets}
-    columns = data.get("columns", [])
-    col_names = []
-    for c in columns:
-        if isinstance(c, dict):
-            col_names.append(c.get("key", c.get("label", "?")))
-        elif isinstance(c, str):
-            col_names.append(c)
-    return {
-        "type": "table",
-        "multi_sheet": False,
-        "columns": col_names,
-        "row_count": len(data.get("rows", [])),
-    }
+    """Structural summary for table documents.
+
+    Tables are XLSX-backed (``data == {xlsx_b64: ...}``); we hand the
+    workbook to ``xlsx_view.overview`` for the canonical summary shape.
+    Legacy JSON-shape data is migrated on the fly so a stale doc that
+    somehow slipped past the store-level migration still summarizes
+    cleanly.
+    """
+    from llming_docs.sheet.xlsx_view import overview
+    from llming_docs.sheet.xlsx_storage import workbook_from_b64
+    from llming_docs.sheet.xlsx_migrate import (
+        is_legacy_json_table,
+        migrate_legacy_json_to_workbook,
+    )
+    if isinstance(data, dict) and "xlsx_b64" in data:
+        try:
+            wb = workbook_from_b64(data["xlsx_b64"])
+        except Exception as exc:
+            return {"type": "table", "error": f"workbook load failed: {exc}"}
+    elif is_legacy_json_table(data):
+        wb = migrate_legacy_json_to_workbook(data)
+    else:
+        return {"type": "table", "sheets": []}
+    return overview(wb)
 
 
 def _summarize_presentation(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -407,56 +401,128 @@ Batch-edit a document using surgical operations. All operations are applied \
 atomically -- if any operation fails or validation fails afterward, the \
 entire batch is rolled back and the document stays unchanged.
 
-PATH LANGUAGE: Paths use slash-separated segments resolved against doc.data:
+The path language depends on the document type. Tables (XLSX) use openpyxl-\
+native A1 addressing; everything else uses JSON-path navigation against \
+doc.data.
+
+═══════════════════════════════════════════════════════════════════════════
+TABLE DOCUMENTS (doc_type="table") — XLSX-NATIVE A1 PATHS
+═══════════════════════════════════════════════════════════════════════════
+Tables are real openpyxl Workbooks under the hood. Reference sheets by \
+0-based INDEX (not name), and cells by A1 address.
+
+Cell value:
+  {op: "set", path: "sheets/0/cells/B3/value", value: 42000}
+  {op: "set", path: "sheets/0/cells/A1/value", value: "Header"}
+
+Cell formatting (each subfield is independent):
+  {op: "set", path: "sheets/0/cells/B3/font",
+   value: {bold: true, italic: false, color: "FF0000", size: 12}}
+  {op: "set", path: "sheets/0/cells/B3/fill",
+   value: {start_color: "FFFF00"}}     # solid fill is the default
+  {op: "set", path: "sheets/0/cells/B3/alignment",
+   value: {horizontal: "center", vertical: "middle", wrap_text: true}}
+  {op: "set", path: "sheets/0/cells/B3/number_format", value: "0.00"}
+  {op: "set", path: "sheets/0/cells/B3/border",
+   value: {top: {style: "thin"}, bottom: {style: "thin"}}}
+
+Set value + format together with a bundle (no subfield):
+  {op: "set", path: "sheets/0/cells/B3",
+   value: {value: 42000, font: {bold: true}, number_format: "#,##0"}}
+
+Bulk-fill a rectangular block (much cheaper than per-cell ops for big tables):
+  {op: "bulk_set", path: "sheets/0/range/A1",
+   values: [["Name", "Floor", "Area"],
+            ["Lobby", 1, 80],
+            ["Office", 2, 45]]}
+
+Rows:
+  {op: "add",    path: "sheets/0/rows/-",     value: ["Lobby", 1, 80]}     # append
+  {op: "add",    path: "sheets/0/rows",       value: [...], position: 3}    # insert at row 3
+  {op: "remove", path: "sheets/0/rows/5"}                                   # delete row 5
+  {op: "set",    path: "sheets/0/rows/3/height", value: 24}
+
+Columns (the LLM's most common bug: forgetting to populate cells AFTER \
+inserting the column):
+  {op: "add",    path: "sheets/0/columns/-",  value: "Etage"}              # append column
+  {op: "add",    path: "sheets/0/columns",    value: "Etage", position: 2} # insert at col 2 (B)
+  {op: "remove", path: "sheets/0/columns/B"}                                # delete column B
+  {op: "set",    path: "sheets/0/columns/B/width", value: 18}
+
+Sheets:
+  {op: "add",    path: "sheets/-",            value: "Q2"}                  # add sheet
+  {op: "remove", path: "sheets/1"}                                          # delete 2nd sheet
+  {op: "set",    path: "sheets/0/name",       value: "Summary"}             # rename
+  {op: "set",    path: "sheets/0/freeze_panes", value: "A2"}
+
+Merges:
+  {op: "add",    path: "sheets/0/merges/-",   value: "A1:C1"}
+  {op: "remove", path: "sheets/0/merges/A1:C1"}
+
+Critical for inserting a column with values:
+The LLM should emit ONE batch with the column-insert op AND the cell-value \
+ops together. Inserting a column does not populate it — you must follow up \
+with cell sets (or a bulk_set over the new column's range).
+
+Example: insert "Etage" as column B and fill it for 3 rows:
+  [
+    {op: "add", path: "sheets/0/columns", value: "Etage", position: 2},
+    {op: "set", path: "sheets/0/cells/B2/value", value: 1},
+    {op: "set", path: "sheets/0/cells/B3/value", value: 2},
+    {op: "set", path: "sheets/0/cells/B4/value", value: 3}
+  ]
+
+Forbidden / legacy paths (these will FAIL — the dispatcher rejects them):
+  ❌ "sheets/Q1/rows/3/revenue"      — column-name keys are gone
+  ❌ "sheets/SheetName/rows/3/foo"   — name lookup on rows is gone
+  ❌ "rows/0/columns/2"              — paths must start with "sheets/<i>"
+
+═══════════════════════════════════════════════════════════════════════════
+ALL OTHER DOC TYPES (text_doc, plotly, presentation, email, html, latex)
+═══════════════════════════════════════════════════════════════════════════
+Paths are slash-separated and resolved against doc.data:
 - Numeric index into arrays: "slides/0", "data/2"
 - Named lookup by 'id' field: "slides/s1" (finds slide with id="s1")
-- Named lookup by 'name' field: "sheets/Q1" (finds sheet with name="Q1")
 - Dict key access: "slides/s1/title", "layout/xaxis/title"
-- Deeply nested: "slides/s1/elements/2/content", "sheets/Q1/rows/3/revenue"
+- Deeply nested: "slides/s1/elements/2/content"
 - Top-level keys: "to", "subject", "body_html"
 
 OPERATIONS:
 - set: Replace value at path.
-  Example: {op: "set", path: "slides/s1/title", value: "New Title"}
-  Example: {op: "set", path: "sheets/Q1/rows/3/revenue", value: 42000}
-  Example: {op: "set", path: "subject", value: "Updated Subject"}
-- add: Insert into array (at position, default=end) or add dict key.
-  Example: {op: "add", path: "slides", value: {id: "s3", title: "New"}, position: 1}
-  Example: {op: "add", path: "data", value: {type: "bar", x: [...], y: [...]}}
+  {op: "set", path: "slides/s1/title", value: "New Title"}
+  {op: "set", path: "subject", value: "Updated Subject"}
+- add: Insert into array (default=end, or 'position') or add dict key.
+  {op: "add", path: "slides", value: {id: "s3", title: "New"}, position: 1}
+  {op: "add", path: "data", value: {type: "bar", x: [...], y: [...]}}
 - remove: Remove item at path.
-  Example: {op: "remove", path: "slides/s2"}
-  Example: {op: "remove", path: "sections/sec3"}
-- move: Reorder array item to new position.
-  Example: {op: "move", path: "slides/s1", position: 0}
-
-COMMON PATTERNS:
-- Change a cell: op=set, path="sheets/SheetName/rows/3/column_key"
-- Change slide title: op=set, path="slides/s1/title", value="..."
-- Add a slide: op=add, path="slides", value={id: "...", title: "...", elements: [...]}
-- Remove a trace: op=remove, path="data/2"
-- Edit email body: op=set, path="body_html", value="<p>...</p>"
-- Add a CC recipient: op=add, path="cc", value="user@example.com"
-- Reorder slides: op=move, path="slides/s3", position=0\
+  {op: "remove", path: "slides/s2"}
+- move: Reorder array item to a new position.
+  {op: "move", path: "slides/s1", position: 0}\
 """
 
 _READ_DOCUMENT_DESCRIPTION = """\
 Read specific parts of a document, search its content, or get a structural \
 summary. Use this to inspect a document before editing.
 
+For TABLE documents prefer the dedicated tools `query_table` (rows in \
+flux/SQL-style shape) and `query_cells` (sparse cells incl. formatting). \
+This tool also works on tables but returns the structural summary; it is \
+mainly meant for non-table doc types.
+
 MODES:
 1. Paths mode: Provide 'paths' to read specific values.
-   Example paths: ["slides/0", "sheets/Q1/rows/0", "subject", "data/0/x"]
+   Non-table examples: ["slides/0", "subject", "data/0/x"]
+   Table examples:     ["sheets/0/cells/B3/value", "sheets/0/name"]
 2. Search mode: Provide 'query' to find matching text across the document.
    Returns matching paths and text snippets.
 3. Summary mode: Omit both 'paths' and 'query' to get a structural overview.
-   Shows slide IDs/titles, sheet names/columns/row counts, section outlines, etc.
+   Shows slide IDs/titles, sheet names/dimensions, section outlines, etc.
 
-PATH LANGUAGE (same as update_document):
-- "slides/s1/title" -- slide title by ID
-- "sheets/Q1/rows/0" -- first row of sheet named Q1
-- "data/0" -- first Plotly trace
-- "sections/sec2/content" -- section content by ID
-- "to", "subject" -- top-level email fields\
+PATH LANGUAGE (same split as update_document):
+- Non-table: "slides/s1/title", "data/0", "sections/sec2/content",
+             "to", "subject"
+- Table (XLSX-native): "sheets/<i>/cells/<A1>/value",
+                       "sheets/<i>/cells/<A1>/font", etc.\
 """
 
 _UNDO_DOCUMENT_DESCRIPTION = """\
@@ -546,7 +612,10 @@ class UnifiedDocumentMCP(InProcessMCPServer):
                             "type": "array",
                             "items": {"type": "string"},
                             "description": (
-                                "Paths to read, e.g. ['slides/0', 'sheets/Q1/rows/0']"
+                                "Paths to read. Non-table examples: "
+                                "['slides/0', 'subject', 'data/0/x']. "
+                                "Table examples: "
+                                "['sheets/0/cells/B3/value', 'sheets/0/name']."
                             ),
                         },
                         "query": {
@@ -574,6 +643,77 @@ class UnifiedDocumentMCP(InProcessMCPServer):
                     "required": ["document_id"],
                 },
             },
+            {
+                # Shape-compatible with llming-flux's ``query_table`` so the
+                # LLM uses identical query semantics regardless of where the
+                # data lives.
+                "name": "query_table",
+                "displayName": "Query Table Rows",
+                "displayDescription": "Read rows from a table document with filters / projection / pagination",
+                "icon": "table_view",
+                "description": (
+                    "Return rows from a `table` document. Same response shape as "
+                    "llming-flux's `query_table`:\n"
+                    "  { table_name, headers, rows: [{col: value}, ...], total_rows, returned_rows }\n"
+                    "\n"
+                    "Use this for data; use `query_cells` if you need formatting."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "document_id": {"type": "string"},
+                        "sheet": {
+                            "description": "Sheet name (string) or 0-based index. Defaults to first.",
+                        },
+                        "range": {
+                            "type": "string",
+                            "description": "Optional A1 range like 'A1:E50'. Defaults to whole sheet.",
+                        },
+                        "columns": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "Project these columns by header name.",
+                        },
+                        "filters": {
+                            "type": "object",
+                            "description": (
+                                "Substring filter per column header. "
+                                "Case-insensitive contains, like llming-flux."
+                            ),
+                        },
+                        "limit": {"type": "integer", "description": "Max rows (default 20, max 100)."},
+                        "offset": {"type": "integer", "description": "Skip this many filtered rows."},
+                    },
+                    "required": ["document_id"],
+                },
+            },
+            {
+                "name": "query_cells",
+                "displayName": "Query Cells (with formatting)",
+                "displayDescription": "Read specific cells from a table including font/fill/border/number_format",
+                "icon": "grid_on",
+                "description": (
+                    "Return individual cells in a range, sparse, with formatting. Use this "
+                    "when you need to see styles, number formats, or compare cells. "
+                    "Response shape:\n"
+                    "  { sheet_name, range, cells: { 'A1': {value, font?, fill?, alignment?, border?, number_format?}, ... } }\n"
+                    "\n"
+                    "Empty cells are omitted. Use `query_table` for bulk data reads "
+                    "(it's cheaper)."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "document_id": {"type": "string"},
+                        "sheet": {"description": "Sheet name or 0-based index"},
+                        "range": {"type": "string", "description": "A1 range e.g. 'A1:E10'"},
+                        "with_formatting": {
+                            "type": "boolean", "default": True,
+                            "description": "Include style fields (default true).",
+                        },
+                    },
+                    "required": ["document_id", "sheet", "range"],
+                },
+            },
         ]
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
@@ -583,7 +723,96 @@ class UnifiedDocumentMCP(InProcessMCPServer):
             return self._handle_read(arguments)
         if name == "undo_document":
             return self._handle_undo(arguments)
+        if name == "query_table":
+            return self._handle_query_table(arguments)
+        if name == "query_cells":
+            return self._handle_query_cells(arguments)
         return json.dumps({"error": f"Unknown tool: {name}"})
+
+    # ------------------------------------------------------------------
+    # query_table / query_cells — XLSX-only
+    # ------------------------------------------------------------------
+
+    def _handle_query_table(self, arguments: Dict[str, Any]) -> str:
+        doc, err = self._load_table_workbook(arguments.get("document_id"))
+        if err:
+            return err
+        wb, _doc = doc
+        from llming_docs.sheet.xlsx_view import query_table
+        try:
+            result = query_table(
+                wb,
+                sheet=arguments.get("sheet"),
+                range_addr=arguments.get("range"),
+                columns=arguments.get("columns"),
+                filters=arguments.get("filters"),
+                limit=arguments.get("limit"),
+                offset=arguments.get("offset"),
+            )
+        except (ValueError, TypeError) as exc:
+            return json.dumps({"error": "query_failed", "message": str(exc)})
+        return json.dumps(result)
+
+    def _handle_query_cells(self, arguments: Dict[str, Any]) -> str:
+        doc, err = self._load_table_workbook(arguments.get("document_id"))
+        if err:
+            return err
+        wb, _doc = doc
+        from llming_docs.sheet.xlsx_view import query_cells
+        try:
+            result = query_cells(
+                wb,
+                sheet=arguments.get("sheet"),
+                range_addr=arguments.get("range"),
+                with_formatting=arguments.get("with_formatting", True),
+            )
+        except (ValueError, TypeError) as exc:
+            return json.dumps({"error": "query_failed", "message": str(exc)})
+        return json.dumps(result)
+
+    def _load_table_workbook(self, doc_id):
+        """Resolve a doc_id to ``(workbook, doc)`` or return an error JSON.
+
+        Reused by both query handlers. Tolerates legacy JSON payloads by
+        migrating on the fly so a doc that hasn't yet been touched by the
+        store-level migration still queries cleanly."""
+        if not doc_id:
+            return None, json.dumps({
+                "error": "missing_document_id",
+                "message": "document_id is required",
+            })
+        doc = self._store.get(doc_id)
+        if doc is None:
+            return None, json.dumps({
+                "error": "document_not_found",
+                "message": f"No document with id '{doc_id}'",
+            })
+        if doc.type != "table":
+            return None, json.dumps({
+                "error": "wrong_type",
+                "message": f"query_table / query_cells only work on `table` docs (got '{doc.type}')",
+            })
+        from llming_docs.sheet.xlsx_storage import workbook_from_b64
+        from llming_docs.sheet.xlsx_migrate import (
+            is_legacy_json_table,
+            migrate_legacy_json_to_workbook,
+        )
+        if isinstance(doc.data, dict) and "xlsx_b64" in doc.data:
+            try:
+                wb = workbook_from_b64(doc.data["xlsx_b64"])
+            except Exception as exc:
+                return None, json.dumps({
+                    "error": "xlsx_load_failed",
+                    "message": f"could not load workbook: {exc}",
+                })
+        elif is_legacy_json_table(doc.data):
+            wb = migrate_legacy_json_to_workbook(doc.data)
+        else:
+            return None, json.dumps({
+                "error": "no_workbook",
+                "message": "table document has no xlsx data",
+            })
+        return (wb, doc), None
 
     # ------------------------------------------------------------------
     # update_document
@@ -616,23 +845,20 @@ class UnifiedDocumentMCP(InProcessMCPServer):
                 "hint": "Provide at least one operation or a new name.",
             })
 
-        # Deep copy for atomicity
-        working_data = copy.deepcopy(doc.data)
+        # Type-aware op routing — table goes to xlsx_ops, everything else
+        # to the JSON _apply_operation path. See ``ops_dispatcher`` for the
+        # rationale and the per-type contracts.
+        from llming_docs.ops_dispatcher import apply_operations_to_data
+        working_data, op_error = apply_operations_to_data(
+            doc.type, doc.data, operations,
+        )
+        if op_error is not None:
+            return json.dumps(op_error)
 
-        # Apply each operation
-        for i, op in enumerate(operations):
-            try:
-                _apply_operation(working_data, op)
-            except (ValueError, KeyError, IndexError, TypeError) as exc:
-                return json.dumps({
-                    "error": "operation_failed",
-                    "failed_operation": i,
-                    "message": str(exc),
-                    "hint": "Use read_document to inspect the current structure.",
-                })
-
-        # Validate the result via store.update (which calls validators)
-        update_kwargs: Dict[str, Any] = {}
+        # Validate via store.update — table skips JSON validation because
+        # the workbook is the source of truth and openpyxl already vetted
+        # every op as it was applied.
+        update_kwargs: Dict[str, Any] = {"skip_validation": (doc.type == "table")}
         if operations:
             update_kwargs["data"] = working_data
         if new_name is not None:

@@ -279,6 +279,12 @@ class DocumentHistory:
 
     def __init__(self) -> None:
         self._entries: list[HistoryEntry] = []
+        # Forward stack — populated by ``undo`` (storing the "current" state
+        # we just stepped away from), drained by ``redo``. Cleared whenever
+        # a fresh edit lands via ``record`` because the user's new edit
+        # invalidates the previous forward branch — same semantics as any
+        # text editor's undo/redo.
+        self._redo: list[tuple[Any, int]] = []
 
     # -- Public API --------------------------------------------------------
 
@@ -334,20 +340,39 @@ class DocumentHistory:
             )
 
         self._entries.append(entry)
+        # A fresh edit always invalidates the forward (redo) branch —
+        # there's no longer a coherent "next" state once the user diverges.
+        self._redo.clear()
         self._prune()
 
-    def undo(self) -> tuple[Any, int] | None:
+    def undo(self, current_data: Any = None, current_version: int = 0) -> tuple[Any, int] | None:
         """Pop the most recent entry and return the old state.
 
         Returns ``(restored_data, version)`` or ``None`` when the
         history is empty.  Because :meth:`record` stores the *old*
         state (the data before the change), undoing returns that state.
+
+        If ``current_data`` is provided, it is pushed onto the redo
+        stack so a subsequent :meth:`redo` can step forward to it.
+        Callers that don't pass it lose redo capability for that step
+        (back-compat for any in-tree caller that doesn't know about redo
+        yet).
         """
 
         if not self._entries:
             return None
 
         last = self._entries.pop()
+
+        # Stash the current state so redo can return us to it. We store a
+        # SNAPSHOT regardless of how the original entry was stored — the
+        # redo stack is bounded to ``MAX_ENTRIES`` and snapshots are far
+        # simpler to reason about for the forward direction.
+        if current_data is not None:
+            self._redo.append((copy.deepcopy(current_data), int(current_version)))
+            # Bound the redo stack to the same cap as the undo stack.
+            while len(self._redo) > self.MAX_ENTRIES:
+                self._redo.pop(0)
 
         # Snapshot entries hold old_data directly
         if last.is_snapshot:
@@ -363,6 +388,22 @@ class DocumentHistory:
 
         # No previous state available — cannot undo
         return None
+
+    def redo(self) -> tuple[Any, int] | None:
+        """Pop the most recent ``undo`` and return the state we stepped
+        away from. Returns ``(restored_data, version)`` or ``None`` when
+        the redo stack is empty (e.g. fresh history, or a new edit
+        cleared the forward branch).
+
+        Callers must ``record(old_data=..., new_data=restored_data, version=...)``
+        themselves to log this redo as a normal edit; ``redo`` does not
+        touch ``_entries`` because the entry it would push is an exact
+        duplicate of the one ``undo`` just popped.
+        """
+        if not self._redo:
+            return None
+        data, version = self._redo.pop()
+        return data, version
 
     def get_version(self, target_version: int) -> Any | None:
         """Reconstruct the document state at *target_version*.

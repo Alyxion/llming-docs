@@ -33,7 +33,7 @@ _TYPE_ALIASES: dict[str, str] = {
 _PREAMBLE_LINES: dict[str, str] = {
     "plotly":       "- `plotly` — Plotly.js chart. data = {data: [...], layout: {...}}",
     "latex":        "- `latex` — LaTeX formula. data = {formula: \"...\"}",
-    "table":        "- `table` — Data table / spreadsheet. data = {columns: [...], rows: [...]}",
+    "table":        "- `table` — Data table / spreadsheet. data = {sheets: [{name, columns, rows}, ...]} (one sheet for simple tables, multiple for workbooks)",
     "text_doc":     "- `text_doc` — Text document (DOCX-like). data = {sections: [{id, type, content, ...}]}",
     "presentation": "- `presentation` — Slide deck (PPTX). data = {title, author, slideNumbers, slides: [{id, title, layout, elements: [...]}]}",
     "html":         "- `html` — Website / web app. data = {html, css, js, title}",
@@ -175,6 +175,15 @@ class DocPluginManager:
             "- Per-type tools (`text_doc_add_section`, `plotly_add_trace`, `table_add_row`, …) "
             "for type-specific operations.",
             "",
+            "### Do NOT Duplicate Content in the Chat",
+            "When you call `create_document` or `update_document`, the document "
+            "itself is rendered in the side pane — the user sees it there. "
+            "**Do not also reproduce the document body in your chat reply.** "
+            "A one-line acknowledgement is fine "
+            "(e.g. *\"Here's the poem you asked for.\"*, *\"Report drafted — see the panel on the right.\"*). "
+            "Copying the full text into chat wastes tokens, duplicates scroll length, "
+            "and makes the side pane feel redundant. The chat reply is a pointer, not a mirror.",
+            "",
             "## Supported Document Types",
             "Pass one of these as the `type` argument to `create_document` "
             "(the shape shown is the `data` JSON payload):",
@@ -188,9 +197,13 @@ class DocPluginManager:
             "- **Text, poem, letter, essay, article, notes, memo, minutes, story** → "
             "`text_doc`. Always. A poem is a text document, not an email draft or HTML.\n"
             "- **Table, list of rows, comparison, inventory** → `table`.\n"
-            "- **Sheet, spreadsheet, Excel, XLSX, workbook** → `table` (use the multi-sheet "
-            "`{sheets: [...]}` shape when the user explicitly wants multiple tabs, otherwise "
-            "flat `{columns, rows}`).\n"
+            "- **Table, sheet, spreadsheet, Excel, XLSX, workbook** → `table`. "
+            "ALWAYS use the canonical multi-sheet shape "
+            "`{sheets: [{name, columns, rows}, …]}` — one sheet for a simple "
+            "spreadsheet, multiple for workbooks. Do NOT emit the legacy flat "
+            "`{columns, rows}` shape; it is accepted for backward compatibility "
+            "only and the editor, exporter, and UI all render best from "
+            "`{sheets}`.\n"
             "- **Slide deck, presentation, PowerPoint** → `presentation`.\n"
             "- **Chart, plot, graph** → `plotly`.\n"
             "- **Website, web page, interactive demo** → `html`.\n"
@@ -205,8 +218,9 @@ class DocPluginManager:
             "reformat it, extract parts of it — always produce the result as a **new "
             "document of the matching type**. Do not dump the result as chat text.\n"
             "- PDF, DOCX, DOC, TXT, RTF, Markdown source → create a `text_doc`.\n"
-            "- XLSX, XLS, CSV, TSV → create a `table` (use `{sheets: [...]}` if the "
-            "source had multiple sheets and the user wants to preserve them).\n"
+            "- XLSX, XLS, CSV, TSV → create a `table` with the `{sheets: [...]}` "
+            "shape. Use one sheet entry for single-sheet sources and one per tab "
+            "for workbooks (preserves sheet names).\n"
             "- PPTX → create a `presentation`.\n"
             "- HTML page / web form → create an `html` document.\n"
             "- Email (`.eml`, forwarded message) → create an `email_draft` for the reply, "
@@ -260,10 +274,22 @@ class DocPluginManager:
             "applied atomically (all-or-nothing). Prefer one call with many operations "
             "over multiple calls: it is faster, creates a single undo step, and uses "
             "less context.\n"
-            "\nPath language — slash-separated, resolves against the document's data:\n"
+            "\nThe path language depends on document type:\n"
+            "\n**Table documents (XLSX-native):** sheets are referenced by 0-based "
+            "index, cells by A1 address.\n"
+            "- `sheets/0/cells/B3/value` — cell B3 on the first sheet.\n"
+            "- `sheets/0/cells/B3/font` — font dict (bold/italic/color/size).\n"
+            "- `sheets/0/cells/B3/fill` — background fill (start_color, fill_type).\n"
+            "- `sheets/0/rows/-` (add) — append a row, value is a list of cell values.\n"
+            "- `sheets/0/columns/-` (add) — append a column, value is the header string.\n"
+            "- `sheets/0/columns` (add) with `position: <col>` — insert column before <col>.\n"
+            "- `bulk_set sheets/0/range/A1` with `values: [[...], ...]` — fill a block.\n"
+            "Inserting a column does NOT populate its cells. Always emit the column "
+            "insert AND the cell sets in the same batch.\n"
+            "\n**All other doc types (text_doc, plotly, presentation, email, html, "
+            "latex):** slash-separated paths against `doc.data`.\n"
             "- `slides/s1/title` — slide with id 's1', field 'title'.\n"
             "- `slides/0/elements/2/content` — first slide, third element, content.\n"
-            "- `sheets/Q1/rows/3/revenue` — sheet named 'Q1', row 3, column 'revenue'.\n"
             "- `sections/abc123/content` — section with id 'abc123'.\n"
             "- `to`, `subject`, `body_html` — top-level email fields.\n"
             "- `data/0/x` — first Plotly trace, x values.\n"
@@ -271,8 +297,10 @@ class DocPluginManager:
             "- `set` — replace value: `{op: 'set', path: 'slides/s1/title', value: 'New Title'}`.\n"
             "- `add` — insert: `{op: 'add', path: 'slides', value: {id: 's3', ...}, position: 2}`.\n"
             "- `remove` — delete: `{op: 'remove', path: 'slides/s2'}`.\n"
-            "- `move` — reorder: `{op: 'move', path: 'slides/s1', position: 0}`.\n"
-            "\nUse `read_document` to inspect before editing. Use `undo_document` to revert. "
+            "- `move` — reorder (non-table): `{op: 'move', path: 'slides/s1', position: 0}`.\n"
+            "- `bulk_set` — table only: drop a 2D `values` array starting at `range/<A1>`.\n"
+            "\nUse `read_document` (or `query_table` / `query_cells` for tables) to inspect "
+            "before editing. Use `undo_document` to revert. "
             "**Always prefer `update_document` over re-creating** — it's faster, preserves "
             "history, and keeps the existing document id stable."
             "\n\n**Title vs filename — do not confuse them.** The `name` argument to "

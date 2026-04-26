@@ -36,8 +36,103 @@ function _loadScript(src) {
   });
 }
 
-/* ── Parse JSON safely ────────────────────────────────────── */
-function _parseJSON(raw) {
+/* ── Dark-mode detector ───────────────────────────────────────
+ *
+ * Popovers get appended to ``document.body`` and therefore escape any
+ * host-side scoping like ``#chat-app.cv2-dark``. We check the well-known
+ * host hints (``#chat-app.cv2-dark`` from lodge, ``body.ldoc-dark`` for
+ * any other host, OS preference as a last resort) and let the popover
+ * carry its theme as a class. */
+function _ldocIsDarkMode() {
+  const host = document.getElementById('chat-app');
+  if (host?.classList.contains('cv2-dark')) return true;
+  if (document.body?.classList.contains('cv2-dark')) return true;
+  if (document.body?.classList.contains('ldoc-dark')) return true;
+  if (document.documentElement?.classList.contains('ldoc-dark')) return true;
+  if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) return true;
+  return false;
+}
+
+/* ── Quasar-style confirm dialog ───────────────────────────────
+ *
+ * Replaces ``window.confirm`` for destructive operations (delete sheet,
+ * delete column with data, …). Visually matches QDialog: centered card
+ * with a backdrop, title + message + Cancel / OK actions. No framework
+ * dependency — a Quasar host gets the same look automatically because
+ * we reuse the same ``--ldoc-popover-*`` tokens.
+ *
+ * Returns a Promise<boolean>. Escape cancels, Enter confirms, click on
+ * backdrop cancels.
+ */
+function _ldocConfirm(opts) {
+  opts = opts || {};
+  return new Promise((resolve) => {
+    const dark = _ldocIsDarkMode();
+    const overlay = document.createElement('div');
+    overlay.className = 'ldoc-dialog-overlay' + (dark ? ' ldoc-dark' : '');
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+
+    const card = document.createElement('div');
+    card.className = 'ldoc-dialog-card';
+
+    const body = document.createElement('div');
+    body.className = 'ldoc-dialog-body';
+    if (opts.title) {
+      const h = document.createElement('div');
+      h.className = 'ldoc-dialog-title';
+      h.textContent = opts.title;
+      body.appendChild(h);
+    }
+    if (opts.message) {
+      const m = document.createElement('div');
+      m.className = 'ldoc-dialog-message';
+      m.textContent = opts.message;
+      body.appendChild(m);
+    }
+    card.appendChild(body);
+
+    const actions = document.createElement('div');
+    actions.className = 'ldoc-dialog-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'ldoc-dialog-btn';
+    cancelBtn.textContent = opts.cancel || 'Cancel';
+
+    const okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.className = 'ldoc-dialog-btn ldoc-dialog-btn-primary'
+                   + (opts.danger ? ' ldoc-dialog-btn-danger' : '');
+    okBtn.textContent = opts.ok || 'OK';
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    card.appendChild(actions);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    function close(value) {
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      resolve(value);
+    }
+    function onKey(ev) {
+      if (ev.key === 'Escape') { ev.preventDefault(); close(false); }
+      else if (ev.key === 'Enter') { ev.preventDefault(); close(true); }
+    }
+    cancelBtn.addEventListener('click', () => close(false));
+    okBtn.addEventListener('click', () => close(true));
+    overlay.addEventListener('click', (ev) => {
+      if (ev.target === overlay) close(false);
+    });
+    document.addEventListener('keydown', onKey, true);
+    // Defer focus so the transition-in animation starts first.
+    requestAnimationFrame(() => okBtn.focus());
+  });
+}
+
+/* ── Dark-mode detector ───────────────────────────────────────
   try { return JSON.parse(raw); }
   catch (firstErr) {
     // LLMs sometimes produce unescaped " inside HTML string values
@@ -612,102 +707,700 @@ const latexPlugin = {
 };
 
 /* ══════════════════════════════════════════════════════════════
-   Table Plugin
+   Table Plugin — editable cells, sheet tabs, row/col add + delete
    ══════════════════════════════════════════════════════════════ */
+
+// Column normaliser — accepts strings or ``{name|title|label|id}`` objects.
+function _ldocColName(c) {
+  if (typeof c === 'string') return c;
+  if (c && typeof c === 'object') return c.name || c.title || c.label || c.id || '';
+  return String(c ?? '');
+}
+
+// Extract the sheet records from a table spec.
+//
+// Source of truth (post-XLSX-migration): ``spec.view.sheets`` — a render
+// snapshot derived server-side from the canonical XLSX workbook. Each
+// sheet has ``{name, columns, rows, cells?, column_widths?, row_heights?,
+// merges?, freeze_panes?}``. ``cells`` is sparse and only carries
+// per-cell formatting overrides.
+//
+// Fallbacks for in-flight legacy docs the server hasn't migrated yet:
+//   * ``spec.sheets`` — old multi-sheet JSON
+//   * ``spec.columns`` / ``spec.rows`` — old flat JSON
+function _ldocGetSheets(spec) {
+  const viewSheets = spec?.view?.sheets;
+  if (Array.isArray(viewSheets) && viewSheets.length) {
+    return viewSheets.map((s, i) => ({
+      name: typeof s.name === 'string' ? s.name : `Sheet ${i + 1}`,
+      columns: Array.isArray(s.columns) ? s.columns : [],
+      rows: Array.isArray(s.rows) ? s.rows : [],
+      cells: (s.cells && typeof s.cells === 'object') ? s.cells : null,
+      column_widths: s.column_widths || null,
+      row_heights:   s.row_heights || null,
+      merges:        Array.isArray(s.merges) ? s.merges : null,
+      freeze_panes:  s.freeze_panes || null,
+    }));
+  }
+  if (Array.isArray(spec?.sheets) && spec.sheets.length) {
+    return spec.sheets.map((s, i) => ({
+      name: typeof s.name === 'string' ? s.name : `Sheet ${i + 1}`,
+      columns: Array.isArray(s.columns) ? s.columns : [],
+      rows: Array.isArray(s.rows) ? s.rows : [],
+    }));
+  }
+  return [{
+    name: spec?.name || 'Sheet 1',
+    columns: Array.isArray(spec?.columns) ? spec.columns : [],
+    rows: Array.isArray(spec?.rows) ? spec.rows : [],
+  }];
+}
+
+// Storage is now always XLSX (always multi-sheet), so every op path is
+// prefixed with ``sheets/<i>/``. Kept as a one-liner so the call sites
+// don't need updating.
+function _ldocSheetPathPrefix(spec, sheetIndex) {
+  return `sheets/${sheetIndex}/`;
+}
+
+// 0-based column index → A1 column letter (0 → "A", 25 → "Z", 26 → "AA").
+function _ldocColLetter(idx) {
+  let s = '';
+  let n = idx + 1;
+  while (n > 0) {
+    n -= 1;
+    s = String.fromCharCode(65 + (n % 26)) + s;
+    n = Math.floor(n / 26);
+  }
+  return s;
+}
+
+// 0-based data row + 0-based column → A1 cell address. Data row 0 is
+// XLSX row 2 (XLSX row 1 is the header).
+function _ldocCellAddr(dataRowIdx, dataColIdx) {
+  return _ldocColLetter(dataColIdx) + (dataRowIdx + 2);
+}
+
+// 0-based column → header-row A1 address (XLSX row 1).
+function _ldocHeaderAddr(dataColIdx) {
+  return _ldocColLetter(dataColIdx) + '1';
+}
+
+// Fire a ``client_doc_update`` WS message. Silent no-op when the chat app
+// or WS isn't available (window mode, rendering unit tests, …).
+function _ldocSendUpdate(docId, operations, extra = {}) {
+  if (!docId || !operations?.length) return;
+  const chatApp = window.__chatApp;
+  if (!chatApp?.ws) return;
+  chatApp.ws.send({
+    type: 'client_doc_update',
+    document_id: docId,
+    operations,
+    ...extra,
+  });
+}
+
+function _ldocSendCreate(docType, name, data) {
+  const chatApp = window.__chatApp;
+  if (!chatApp?.ws) return;
+  chatApp.ws.send({
+    type: 'client_doc_create',
+    doc_type: docType,
+    name: name || 'Untitled',
+    data: data || {},
+  });
+}
+
+// Empty-doc templates — exposed so the workspace "new document" menu can
+// bootstrap a doc without reimplementing schema knowledge in the host.
+//
+// New tables always use the multi-sheet shape (``{sheets: [{…}]}``) — the
+// sheet is the natural container for columns and rows, and keeping the
+// shape uniform avoids a second code path for the "single-sheet" case. The
+// validator + exporters accept both shapes; only the *canonical* output we
+// produce from the UI changed.
+const _ldocEmptyTemplates = {
+  text_doc: () => ({
+    sections: [{ id: 's1', type: 'paragraph', content: '' }],
+  }),
+  table: () => ({
+    sheets: [{
+      name: 'Sheet 1',
+      columns: ['Column 1', 'Column 2'],
+      rows: [['', ''], ['', '']],
+    }],
+  }),
+};
+
+// Expose to hosts — same pattern as ChatApp globals.
+window.LDocTemplates = _ldocEmptyTemplates;
+window.LDocCreateDoc = _ldocSendCreate;
+
 const tablePlugin = {
   inline: true,
   render: async (container, rawData, blockId) => {
     const spec = _parseJSON(rawData);
-    if (!spec || !spec.columns || !spec.rows) {
+    if (!spec) {
       container.textContent = rawData;
       return;
     }
 
-    /* Normalise columns: accept strings or {name:…} objects */
-    const colNames = spec.columns.map(c => (typeof c === 'string') ? c : (c.name || c.title || c.label || String(c)));
+    const docId = spec.id || blockId;
+    const sheets = _ldocGetSheets(spec);
+    // Storage is XLSX (always multi-sheet). Any legacy doc reaching us
+    // here will be migrated by the server on first ``client_doc_update``;
+    // we don't run a client-side migration anymore.
+    const isMulti = true;
 
-    const table = document.createElement('table');
-    table.className = 'ldoc-table';
-    const thead = document.createElement('thead');
-    const headRow = document.createElement('tr');
-    for (const col of colNames) {
-      const th = document.createElement('th');
-      th.textContent = col;
-      headRow.appendChild(th);
-    }
-    thead.appendChild(headRow);
-    table.appendChild(thead);
-
-    const tbody = document.createElement('tbody');
-    for (const row of spec.rows) {
-      const tr = document.createElement('tr');
-      if (Array.isArray(row)) {
-        for (const cell of row) {
-          const td = document.createElement('td');
-          td.textContent = (cell != null && typeof cell === 'object') ? JSON.stringify(cell) : (cell ?? '');
-          tr.appendChild(td);
-        }
-      } else if (row && typeof row === 'object') {
-        /* Try column-name lookup first; if all miss, fall back to row's own keys in order */
-        const rowKeys = Object.keys(row);
-        let matched = 0;
-        for (const col of colNames) { if (row[col] !== undefined) matched++; }
-        const useKeys = (matched === 0 && rowKeys.length > 0);
-        const keys = useKeys ? rowKeys.slice(0, colNames.length) : colNames;
-        for (const k of keys) {
-          const td = document.createElement('td');
-          const val = row[k];
-          td.textContent = (val != null && typeof val === 'object') ? JSON.stringify(val) : (val ?? '');
-          tr.appendChild(td);
-        }
-      }
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
+    // Persist the active sheet index across re-renders so switching tabs,
+    // then receiving a doc_updated, doesn't kick the user back to sheet 0.
+    const stateKey = `__ldocTableState_${docId}`;
+    const state = window[stateKey] || { activeSheet: 0 };
+    if (state.activeSheet >= sheets.length) state.activeSheet = sheets.length - 1;
+    if (state.activeSheet < 0) state.activeSheet = 0;
+    window[stateKey] = state;
 
     const wrapper = document.createElement('div');
     wrapper.className = 'ldoc-table-wrapper';
-    wrapper.appendChild(table);
+    wrapper.dataset.docId = docId;
+    if (isMulti) wrapper.classList.add('ldoc-table-multi');
+    // Needed so ``keydown`` lands here — contenteditable children steal
+    // focus but the wrapper can still handle Ctrl/Cmd+Z when focus is
+    // inside any descendant (via capture).
+    wrapper.tabIndex = -1;
+
+    // ── Active sheet: header + body ──
+    const activeSheet = sheets[state.activeSheet] || sheets[0];
+    const pathPrefix = _ldocSheetPathPrefix(spec, state.activeSheet);
+
+    const scroll = document.createElement('div');
+    scroll.className = 'ldoc-table-scroll';
+    const table = document.createElement('table');
+    table.className = 'ldoc-table ldoc-table-editable';
+
+    // Header row — contenteditable cells. No inline buttons; destructive
+    // actions and insertion live on the right-click context menu below.
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    (activeSheet.columns || []).forEach((col, colIdx) => {
+      headRow.appendChild(_ldocBuildHeaderCell(col, colIdx, docId, pathPrefix, spec, activeSheet));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    // Body rows — each cell contenteditable. Right-click for insert/delete.
+    const tbody = document.createElement('tbody');
+    (activeSheet.rows || []).forEach((row, rowIdx) => {
+      tbody.appendChild(_ldocBuildRow(
+        row, rowIdx, activeSheet.columns || [], docId, pathPrefix, spec, activeSheet,
+      ));
+    });
+    table.appendChild(tbody);
+
+    scroll.appendChild(table);
+    wrapper.appendChild(scroll);
+
+    // ── Sheet tab strip (Excel-style — bottom, subtle) ──
+    const tabStrip = document.createElement('div');
+    tabStrip.className = 'ldoc-sheet-tabs';
+    _ldocRenderSheetTabs(tabStrip, sheets, state, docId, isMulti, spec);
+    wrapper.appendChild(tabStrip);
+
     container.appendChild(wrapper);
+
+    // Undo / redo via Ctrl/Cmd+Z — scoped to this wrapper. ``capture: true``
+    // so the handler fires even when focus is in a contenteditable cell
+    // (which would otherwise consume keydowns).
+    wrapper.addEventListener('keydown', (ev) => {
+      const mod = ev.metaKey || ev.ctrlKey;
+      if (!mod) return;
+      if (ev.key === 'z' || ev.key === 'Z') {
+        if (ev.shiftKey) { _ldocRedo(docId); }
+        else { _ldocUndo(docId); }
+        ev.preventDefault();
+        ev.stopPropagation();
+      } else if (ev.key === 'y' || ev.key === 'Y') {
+        _ldocRedo(docId);
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    }, true);
 
     // Register in blockDataStore so window mode works
     const chatApp = document.querySelector('#chat-app')?.__vue_app__?.config?.globalProperties?.$chatApp
       || window.__chatApp;
     if (chatApp?._blockDataStore) {
-      chatApp._blockDataStore.register(spec.id || blockId, 'table', spec);
+      chatApp._blockDataStore.register(docId, 'table', spec);
     }
 
+    // Single download button. Click → format menu (XLSX, HTML).
+    // Ctrl/Cmd+Shift+click → raw-JSON source panel.
     const fileName = spec.name || spec.title || `table-${blockId}`;
-
     const exportBar = document.createElement('div');
     exportBar.className = 'ldoc-plugin-export';
-    exportBar.innerHTML = `
-      <button class="ldoc-export-btn ldoc-table-xlsx-btn" title="Download XLSX">XLSX</button>
-      <button class="ldoc-export-btn ldoc-table-csv-btn" title="Download CSV">CSV</button>`;
-    _addSourceButton(exportBar, rawData);
-    _addWorkspaceButton(exportBar, blockId);
     container.appendChild(exportBar);
 
-    // CSV export
-    exportBar.querySelector('.ldoc-table-csv-btn').addEventListener('click', () => {
-      const csvRows = [spec.columns.join(',')];
-      for (const row of spec.rows) {
-        csvRows.push(row.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','));
-      }
-      const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `${fileName}.csv`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    });
-
-    // XLSX export with formatting (built from raw XML — no SheetJS dependency)
-    exportBar.querySelector('.ldoc-table-xlsx-btn').addEventListener('click', () => {
-      _exportTableAsXlsx(spec, fileName);
+    _addDownloadButton(exportBar, {
+      rawData,
+      formats: [
+        {
+          label: 'Download as XLSX',
+          filename: `${fileName}.xlsx`,
+          mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          build: () => _exportTableAsXlsxBytes(spec),
+        },
+        {
+          label: 'Download as HTML',
+          filename: `${fileName}.html`,
+          mime: 'text/html',
+          build: () => _exportTableAsHtml(spec, fileName),
+        },
+      ],
     });
   },
 };
+
+// ── Helpers: build header cell / body row ──────────────────────
+
+function _ldocBuildHeaderCell(col, colIdx, docId, pathPrefix, spec, activeSheet) {
+  const th = document.createElement('th');
+  th.className = 'ldoc-col-head';
+  th.dataset.colIdx = String(colIdx);
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'ldoc-col-label';
+  labelSpan.contentEditable = 'true';
+  labelSpan.spellcheck = false;
+  labelSpan.textContent = _ldocColName(col);
+  labelSpan.addEventListener('blur', () => {
+    const newName = labelSpan.textContent.trim();
+    if (newName === _ldocColName(col)) return;
+    // Headers live in row 1 of the workbook — set the value on the
+    // corresponding A1-style cell address (e.g. column index 1 → "B1").
+    _ldocApplyWithUndo(docId, spec, [
+      { op: 'set',
+        path: `${pathPrefix}cells/${_ldocHeaderAddr(colIdx)}/value`,
+        value: newName },
+    ]);
+  });
+  labelSpan.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); labelSpan.blur(); }
+  });
+  th.appendChild(labelSpan);
+  th.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    _ldocShowContextMenu(ev, _ldocColumnMenuItems(docId, spec, activeSheet, pathPrefix, colIdx));
+  });
+  return th;
+}
+
+function _ldocBuildRow(row, rowIdx, columns, docId, pathPrefix, spec, activeSheet) {
+  const tr = document.createElement('tr');
+  tr.dataset.rowIdx = String(rowIdx);
+  const isArr = Array.isArray(row);
+  const len = columns.length;
+  for (let c = 0; c < len; c++) {
+    const td = document.createElement('td');
+    td.contentEditable = 'true';
+    td.spellcheck = false;
+    td.dataset.colIdx = String(c);
+    let val;
+    if (isArr) {
+      val = row[c];
+    } else if (row && typeof row === 'object') {
+      const key = _ldocColName(columns[c]);
+      val = (row[key] !== undefined)
+        ? row[key]
+        : row[Object.keys(row)[c]];
+    }
+    td.textContent = (val != null && typeof val === 'object')
+      ? JSON.stringify(val)
+      : (val ?? '');
+    const origValue = td.textContent;
+    const origType = typeof val;
+    td.addEventListener('blur', () => {
+      const newValue = td.textContent;
+      if (newValue === origValue) return;
+      // Keep numeric typing stable if the cell was a number and the new
+      // text looks like one too — otherwise fall back to string.
+      const coerced = (origType === 'number' && newValue.trim() !== '' && !Number.isNaN(Number(newValue)))
+        ? Number(newValue)
+        : newValue;
+      // Cell values use openpyxl-native A1 addressing. Data row ``rowIdx``
+      // (0-based) corresponds to XLSX row ``rowIdx + 2`` (row 1 is the
+      // header) — ``_ldocCellAddr`` does the conversion.
+      _ldocApplyWithUndo(docId, spec, [
+        { op: 'set',
+          path: `${pathPrefix}cells/${_ldocCellAddr(rowIdx, c)}/value`,
+          value: coerced },
+      ]);
+    });
+    td.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); td.blur(); }
+      if (ev.key === 'Escape') { td.textContent = origValue; td.blur(); }
+    });
+    td.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      _ldocShowContextMenu(ev, _ldocCellMenuItems(
+        docId, spec, activeSheet, pathPrefix, rowIdx, c,
+      ));
+    });
+    tr.appendChild(td);
+  }
+  return tr;
+}
+
+// ── Context menu (shared) ──────────────────────────────────────
+
+function _ldocShowContextMenu(event, items) {
+  // Dismiss any existing menu first.
+  document.querySelectorAll('.ldoc-ctx-menu').forEach(m => m.remove());
+  const menu = document.createElement('div');
+  // Popovers attach to <body>, which is outside any ``#chat-app.cv2-dark``
+  // variable scope. Tag the popover with ``ldoc-dark`` when the host is in
+  // dark mode so our own CSS flips the tokens — no host-CSS dependency.
+  menu.className = _ldocIsDarkMode()
+    ? 'ldoc-ctx-menu ldoc-dark'
+    : 'ldoc-ctx-menu';
+  for (const item of items) {
+    if (item === null) {
+      const sep = document.createElement('div');
+      sep.className = 'ldoc-ctx-sep';
+      menu.appendChild(sep);
+      continue;
+    }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ldoc-ctx-item';
+    if (item.danger) btn.classList.add('danger');
+    btn.textContent = item.label;
+    if (item.disabled) btn.disabled = true;
+    btn.addEventListener('click', () => {
+      menu.remove();
+      try { item.onClick?.(); } catch (e) { console.error('[DOC] ctx-menu action failed:', e); }
+    });
+    menu.appendChild(btn);
+  }
+  // Clamp position inside the viewport.
+  menu.style.left = event.clientX + 'px';
+  menu.style.top  = event.clientY + 'px';
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  if (r.right > window.innerWidth)  menu.style.left = (event.clientX - r.width) + 'px';
+  if (r.bottom > window.innerHeight) menu.style.top  = (event.clientY - r.height) + 'px';
+
+  const dismiss = (ev) => {
+    if (!menu.contains(ev.target)) { menu.remove(); cleanup(); }
+  };
+  const onKey = (ev) => { if (ev.key === 'Escape') { menu.remove(); cleanup(); } };
+  function cleanup() {
+    document.removeEventListener('mousedown', dismiss, true);
+    document.removeEventListener('keydown', onKey, true);
+  }
+  setTimeout(() => {
+    document.addEventListener('mousedown', dismiss, true);
+    document.addEventListener('keydown', onKey, true);
+  }, 0);
+}
+
+function _ldocCellMenuItems(docId, spec, sheet, pathPrefix, rowIdx, colIdx) {
+  const rowLen = (sheet.columns || []).length;
+  const rowCount = (sheet.rows || []).length;
+  return [
+    { label: 'Insert row above', onClick: () => _ldocInsertRow(docId, spec, sheet, pathPrefix, rowIdx) },
+    { label: 'Insert row below', onClick: () => _ldocInsertRow(docId, spec, sheet, pathPrefix, rowIdx + 1) },
+    {
+      label: 'Delete row',
+      danger: true,
+      disabled: rowCount <= 1,
+      // Data row ``rowIdx`` (0-based) is XLSX row ``rowIdx + 2``.
+      onClick: () => _ldocApplyWithUndo(docId, spec, [
+        { op: 'remove', path: `${pathPrefix}rows/${rowIdx + 2}` },
+      ]),
+    },
+    null,
+    { label: 'Insert column before', onClick: () => _ldocInsertColumn(docId, spec, sheet, pathPrefix, colIdx) },
+    { label: 'Insert column after',  onClick: () => _ldocInsertColumn(docId, spec, sheet, pathPrefix, colIdx + 1) },
+    {
+      label: 'Delete column',
+      danger: true,
+      disabled: rowLen <= 1,
+      onClick: () => _ldocDeleteColumn(docId, spec, sheet, pathPrefix, colIdx),
+    },
+    null,
+    { label: 'Clear cell', onClick: () => _ldocApplyWithUndo(docId, spec, [
+        { op: 'set',
+          path: `${pathPrefix}cells/${_ldocCellAddr(rowIdx, colIdx)}/value`,
+          value: '' },
+      ]) },
+  ];
+}
+
+function _ldocColumnMenuItems(docId, spec, sheet, pathPrefix, colIdx) {
+  const rowLen = (sheet.columns || []).length;
+  return [
+    { label: 'Insert column before', onClick: () => _ldocInsertColumn(docId, spec, sheet, pathPrefix, colIdx) },
+    { label: 'Insert column after',  onClick: () => _ldocInsertColumn(docId, spec, sheet, pathPrefix, colIdx + 1) },
+    {
+      label: 'Delete column',
+      danger: true,
+      disabled: rowLen <= 1,
+      onClick: () => _ldocDeleteColumn(docId, spec, sheet, pathPrefix, colIdx),
+    },
+  ];
+}
+
+function _ldocInsertRow(docId, spec, sheet, pathPrefix, atIndex) {
+  // ``atIndex`` is 0-based among DATA rows; XLSX rows are 1-based with
+  // row 1 = header. Append → omit position; mid-insert → position is the
+  // 1-based XLSX row to take.
+  const blank = (sheet.columns || []).map(() => '');
+  const op = (atIndex >= (sheet.rows || []).length)
+    ? { op: 'add', path: `${pathPrefix}rows/-`, value: blank }
+    : { op: 'add', path: `${pathPrefix}rows`, value: blank, position: atIndex + 2 };
+  _ldocApplyWithUndo(docId, spec, [op]);
+}
+
+function _ldocInsertColumn(docId, spec, sheet, pathPrefix, atIndex) {
+  // ``atIndex`` is 0-based; xlsx_ops accepts ``A``/``B``/… letters for
+  // remove and ``add columns/-`` for append. For mid-insert it accepts a
+  // 1-based ``position``. The xlsx_ops handler also takes care of
+  // shifting every existing row's cells right.
+  const newName = `Column ${(sheet.columns || []).length + 1}`;
+  if (atIndex >= (sheet.columns || []).length) {
+    _ldocApplyWithUndo(docId, spec, [
+      { op: 'add', path: `${pathPrefix}columns/-`, value: newName },
+    ]);
+  } else {
+    _ldocApplyWithUndo(docId, spec, [
+      { op: 'add', path: `${pathPrefix}columns`, value: newName,
+        position: atIndex + 1 },
+    ]);
+  }
+}
+
+function _ldocDeleteColumn(docId, spec, sheet, pathPrefix, colIdx) {
+  // openpyxl removes the column AND everything below it in one shot; we
+  // pass the column letter (more readable in error messages than an
+  // index) and let xlsx_ops handle row data shifting.
+  _ldocApplyWithUndo(docId, spec, [
+    { op: 'remove',
+      path: `${pathPrefix}columns/${_ldocColLetter(colIdx)}` },
+  ]);
+}
+
+// ── Undo: server-side history-based ────────────────────────────
+//
+// Tables are XLSX-backed; reconstructing inverse ops on the client is
+// fragile (reverting a column delete needs the full column data, etc).
+// Instead the server's ``DocumentSessionStore`` keeps a bounded history
+// of ``doc.data`` snapshots. The client just tracks "how many of my own
+// edits can I still undo" — a counter per docId — and fires a single
+// ``client_doc_undo`` WS message on Cmd+Z. The server pops history,
+// emits ``doc_updated`` with the prior bytes, and the workspace
+// re-renders.
+//
+// AI boundary: when an AI-driven edit lands (``doc_streaming_end`` with
+// the table's id), the counter is reset to 0 so Cmd+Z stops at the last
+// AI change — matches the rule "undo, but not across AI edits".
+
+function _ldocUndoStackFor(docId) {
+  window._ldocUndoStacks = window._ldocUndoStacks || {};
+  if (!window._ldocUndoStacks[docId]) {
+    // ``undo`` = number of my own edits I can still step back through.
+    // ``redo`` = number of undone edits I can still step forward to.
+    // A fresh local edit increments ``undo`` and **clears ``redo``**
+    // (matches every editor's "any edit invalidates the forward branch"
+    // semantics — kept in sync with the server's history.record()).
+    // An AI-driven update resets both to 0 so neither direction crosses
+    // an AI boundary.
+    window._ldocUndoStacks[docId] = { undo: 0, redo: 0 };
+  }
+  return window._ldocUndoStacks[docId];
+}
+
+function _ldocApplyWithUndo(docId, spec, ops) {
+  // Forward path: send ops; bump the undo counter; clear the redo
+  // counter (a fresh edit invalidates the forward branch). The actual
+  // reversal is handled server-side by walking the doc store's history.
+  if (!ops || !ops.length) return;
+  const stack = _ldocUndoStackFor(docId);
+  stack.undo = (stack.undo || 0) + 1;
+  stack.redo = 0;
+  _ldocSendUpdate(docId, ops);
+}
+
+function _ldocUndo(docId) {
+  const stack = _ldocUndoStackFor(docId);
+  if (!stack.undo || stack.undo <= 0) return;  // nothing of mine to undo
+  stack.undo -= 1;
+  stack.redo = (stack.redo || 0) + 1;
+  const chatApp = window.__chatApp;
+  if (!chatApp?.ws) return;
+  // Server pops its history and re-emits ``doc_updated``; we don't need
+  // to send any ops — the doc state is the op.
+  chatApp.ws.send({ type: 'client_doc_undo', document_id: docId });
+}
+
+function _ldocRedo(docId) {
+  const stack = _ldocUndoStackFor(docId);
+  if (!stack.redo || stack.redo <= 0) return;
+  stack.redo -= 1;
+  stack.undo = (stack.undo || 0) + 1;
+  const chatApp = window.__chatApp;
+  if (!chatApp?.ws) return;
+  chatApp.ws.send({ type: 'client_doc_redo', document_id: docId });
+}
+
+// ── Sheet tabs ─────────────────────────────────────────────────
+
+function _ldocRenderSheetTabs(strip, sheets, state, docId, isMulti, spec) {
+  strip.innerHTML = '';
+  sheets.forEach((sheet, i) => {
+    const tab = document.createElement('div');
+    tab.className = 'ldoc-sheet-tab';
+    if (i === state.activeSheet) tab.classList.add('active');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'ldoc-sheet-name';
+    nameSpan.textContent = sheet.name;
+    nameSpan.title = 'Right-click for options · double-click to rename';
+    nameSpan.addEventListener('click', () => {
+      state.activeSheet = i;
+      _ldocRerenderInPlace(strip.closest('.ldoc-table-wrapper'), docId);
+    });
+    nameSpan.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      _ldocPromptRenameSheet(docId, spec, i, sheet.name, isMulti);
+    });
+    tab.appendChild(nameSpan);
+    tab.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      _ldocShowContextMenu(ev, _ldocSheetMenuItems(docId, spec, sheets, state, i, isMulti));
+    });
+    strip.appendChild(tab);
+  });
+
+  // "+" at the far right — hairline, subtle. Title differs depending on
+  // whether this is already a multi-sheet workbook or we'd be converting.
+  const addBtn = document.createElement('button');
+  addBtn.className = 'ldoc-sheet-add';
+  addBtn.type = 'button';
+  addBtn.textContent = '+';
+  addBtn.title = isMulti ? 'Add sheet' : 'Convert to multi-sheet and add a sheet';
+  addBtn.addEventListener('click', () => {
+    _ldocAddSheet(docId, spec, sheets, isMulti);
+  });
+  strip.appendChild(addBtn);
+}
+
+function _ldocSheetMenuItems(docId, spec, sheets, state, sheetIdx, isMulti) {
+  const sheet = sheets[sheetIdx];
+  return [
+    { label: 'Rename', onClick: () => _ldocPromptRenameSheet(docId, spec, sheetIdx, sheet.name, isMulti) },
+    { label: 'Insert sheet before', onClick: () => _ldocAddSheetAt(docId, spec, sheets, isMulti, sheetIdx) },
+    { label: 'Insert sheet after',  onClick: () => _ldocAddSheetAt(docId, spec, sheets, isMulti, sheetIdx + 1) },
+    null,
+    {
+      label: 'Delete sheet',
+      danger: true,
+      disabled: !isMulti || sheets.length <= 1,
+      onClick: async () => {
+        const ok = await _ldocConfirm({
+          title: 'Delete sheet',
+          message: `"${sheet.name}" and all its rows will be removed. This can be undone with Ctrl/Cmd+Z.`,
+          ok: 'Delete',
+          cancel: 'Cancel',
+          danger: true,
+        });
+        if (!ok) return;
+        _ldocApplyWithUndo(docId, spec, [
+          { op: 'remove', path: `sheets/${sheetIdx}` },
+        ]);
+        // If we removed the active sheet, fall back to sheet 0 on next render.
+        if (state.activeSheet === sheetIdx) state.activeSheet = Math.max(0, sheetIdx - 1);
+      },
+    },
+  ];
+}
+
+function _ldocPromptRenameSheet(docId, spec, sheetIndex, currentName, isMulti) {
+  const newName = prompt('Rename sheet:', currentName);
+  if (newName == null || newName === currentName) return;
+  const path = isMulti ? `sheets/${sheetIndex}/name` : 'name';
+  _ldocApplyWithUndo(docId, spec, [{ op: 'set', path, value: newName }]);
+}
+
+function _ldocMakeEmptySheet(index) {
+  return {
+    name: `Sheet ${index + 1}`,
+    columns: ['Column 1', 'Column 2'],
+    rows: [['', '']],
+  };
+}
+
+function _ldocAddSheet(docId, spec, sheets, isMulti) {
+  if (isMulti) {
+    _ldocApplyWithUndo(docId, spec, [{
+      op: 'add', path: 'sheets/-', value: _ldocMakeEmptySheet(sheets.length),
+    }]);
+    return;
+  }
+  // Flat → multi-sheet conversion. Add the ``sheets`` key (``set`` would
+  // error because it doesn't exist yet) wrapping the old flat data as
+  // sheet 1, then drop the now-redundant ``columns`` / ``rows``.
+  const existing = sheets[0];
+  const converted = [
+    {
+      name: existing.name || 'Sheet 1',
+      columns: existing.columns,
+      rows: existing.rows,
+    },
+    _ldocMakeEmptySheet(1),
+  ];
+  _ldocApplyWithUndo(docId, spec, [
+    { op: 'add',    path: 'sheets',  value: converted },
+    { op: 'remove', path: 'columns' },
+    { op: 'remove', path: 'rows' },
+  ]);
+}
+
+function _ldocAddSheetAt(docId, spec, sheets, isMulti, atIndex) {
+  if (!isMulti) {
+    // Converting also satisfies "insert sheet" — the new sheet ends up at
+    // index 1 either way, which is a reasonable default.
+    _ldocAddSheet(docId, spec, sheets, false);
+    return;
+  }
+  const newSheet = _ldocMakeEmptySheet(sheets.length);
+  if (atIndex >= sheets.length) {
+    _ldocApplyWithUndo(docId, spec, [{ op: 'add', path: 'sheets/-', value: newSheet }]);
+  } else {
+    _ldocApplyWithUndo(docId, spec, [{
+      op: 'add', path: 'sheets', value: newSheet, position: atIndex,
+    }]);
+  }
+}
+
+function _ldocRerenderInPlace(wrapper, docId) {
+  // For inline blocks the host doesn't listen to ldoc:invalidate-cache, so
+  // we manually trigger a re-render. The block wrapper sits inside a host
+  // ``[data-block-id]`` container; we just find it and ask for re-render
+  // by dispatching a DOM mutation event the host already watches.
+  if (!wrapper) return;
+  // Prefer the workspace re-render path when available (side-pane case).
+  const app = window.__chatApp;
+  if (app && typeof app._renderActiveDoc === 'function'
+      && app.activeTabId === docId) {
+    app._renderActiveDoc();
+    return;
+  }
+  // Inline mode: rebuild the block. Simplest path: fire ldoc:invalidate
+  // and hope the host listens. If not, the next ``doc_updated`` from any
+  // user edit will repaint.
+  document.dispatchEvent(new CustomEvent('ldoc:invalidate-cache', {
+    detail: { docId },
+  }));
+}
 
 /**
  * Export a table spec as a well-formatted XLSX file.
@@ -875,12 +1568,87 @@ ${ssList.map(s => `<si><t>${esc(s)}</t></si>`).join('\n')}
 }
 
 function _exportTableAsXlsx(spec, fileName) {
-  const blob = _buildTableXlsxBlob(spec);
+  const blob = _exportTableAsXlsxBytes(spec);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `${fileName.replace(/[^a-zA-Z0-9_\- äöüÄÖÜß]/g, '')}.xlsx`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+/** Build XLSX bytes (Blob) for a table spec in either shape.
+ *
+ * The underlying builder is single-sheet; for a multi-sheet spec we pick
+ * the first sheet. Full multi-sheet XLSX support is a follow-up — in the
+ * meantime, users who need a specific sheet can switch tabs in the UI and
+ * right-click → Save Source (Ctrl+Shift+click) for the full JSON. */
+function _exportTableAsXlsxBytes(spec) {
+  const flat = _ldocSpecToFlat(spec);
+  return _buildTableXlsxBlob(flat);
+}
+
+/** Produce a standalone HTML document with every sheet rendered as an
+ *  HTML ``<table>``. Sheet names become ``<h2>`` headings. */
+function _exportTableAsHtml(spec, fileName) {
+  const sheets = _ldocGetSheets(spec);
+  const esc = s => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const parts = [];
+  for (const sheet of sheets) {
+    if (sheets.length > 1) {
+      parts.push(`<h2>${esc(sheet.name)}</h2>`);
+    }
+    parts.push('<table>');
+    if ((sheet.columns || []).length) {
+      parts.push('<thead><tr>');
+      for (const col of sheet.columns) parts.push(`<th>${esc(_ldocColName(col))}</th>`);
+      parts.push('</tr></thead>');
+    }
+    parts.push('<tbody>');
+    for (const row of (sheet.rows || [])) {
+      parts.push('<tr>');
+      const cells = Array.isArray(row) ? row : Object.values(row || {});
+      for (const cell of cells) parts.push(`<td>${esc(cell)}</td>`);
+      parts.push('</tr>');
+    }
+    parts.push('</tbody></table>');
+  }
+  const body = parts.join('\n');
+  const title = esc(fileName || spec.name || 'Table');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>${title}</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 24px; color: #111; }
+    h1 { font-size: 20px; margin: 0 0 16px; }
+    h2 { font-size: 15px; margin: 20px 0 8px; color: #555; }
+    table { border-collapse: collapse; margin-bottom: 24px; }
+    th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; font-weight: 600; }
+    tr:nth-child(even) td { background: #fafafa; }
+  </style>
+</head>
+<body>
+<h1>${title}</h1>
+${body}
+</body>
+</html>`;
+}
+
+/** Reduce any table spec (flat or multi-sheet) to a single ``{columns, rows}``
+ *  payload for exporters that only support one sheet. Multi-sheet inputs
+ *  collapse to the first sheet; empty inputs yield safe empties. */
+function _ldocSpecToFlat(spec) {
+  const sheets = _ldocGetSheets(spec);
+  const first = sheets[0] || { columns: [], rows: [] };
+  return {
+    columns: (first.columns || []).map(_ldocColName),
+    rows: (first.rows || []).map(r =>
+      Array.isArray(r) ? r : Object.values(r || {})
+    ),
+  };
 }
 
 /** Convert 0-based column index to Excel letter (0→A, 25→Z, 26→AA) */
@@ -1297,11 +2065,12 @@ const textDocPlugin = {
 
     const exportBar = document.createElement('div');
     exportBar.className = 'ldoc-plugin-export';
-    exportBar.innerHTML = `<button class="ldoc-export-btn ldoc-textdoc-docx-btn" title="Download DOCX">DOCX</button><button class="ldoc-export-btn ldoc-textdoc-html-btn" title="Download HTML">HTML</button>`;
-    _addSourceButton(exportBar, rawData);
-    _addWorkspaceButton(exportBar, blockId);
     container.appendChild(exportBar);
-    exportBar.querySelector('.ldoc-textdoc-docx-btn').addEventListener('click', async () => {
+
+    // ── DOCX build — resolves embeds, converts charts to PNG, fetches
+    //     the server-side docx renderer. Shared between the inline
+    //     export-bar button and the workspace header.
+    const _buildDocx = async () => {
       const cfg = window.__CHAT_CONFIG__ || {};
       const apiBase = cfg.wsPath ? cfg.wsPath.replace(/\/ws\/.*/, '') : '/api/llming';
       try {
@@ -1390,30 +2159,43 @@ const textDocPlugin = {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ spec: exportSpec }),
         });
-        if (!resp.ok) { console.error('DOCX export failed:', await resp.text()); return; }
-        const blob = await resp.blob();
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        const fname = (spec.title || 'document').replace(/[^a-zA-Z0-9_\- äöüÄÖÜß]/g, '').trim() || 'document';
-        a.download = `${fname}.docx`;
-        a.click();
-        URL.revokeObjectURL(a.href);
-      } catch (err) { console.error('DOCX export error:', err); }
-    });
-    exportBar.querySelector('.ldoc-textdoc-html-btn').addEventListener('click', async () => {
+        if (!resp.ok) { console.error('DOCX export failed:', await resp.text()); return null; }
+        return await resp.blob();
+      } catch (err) { console.error('DOCX export error:', err); return null; }
+    };
+
+    // ── HTML build — re-rendered from the live editor DOM so the user's
+    //     unsaved edits are included. Inline Plotly charts get flattened
+    //     to <img> tags first.
+    const _buildHtml = async () => {
       const clone = doc.cloneNode(true);
       const html = await _convertInlineChartsToImages(clone);
-      const fullDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Document</title>
-        <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:40px auto;line-height:1.7;padding:0 20px}
-        table{border-collapse:collapse;width:100%}th,td{padding:6px 12px;border:1px solid #ddd;text-align:left}th{background:#f5f5f5}
-        img{max-width:100%;height:auto}</style>
-        </head><body><div class="ldoc-text">${html}</div></body></html>`;
-      const blob = new Blob([fullDoc], { type: 'text/html' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'document.html';
-      a.click();
-      URL.revokeObjectURL(a.href);
+      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${_escHtml(spec.name || 'Document')}</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:800px;margin:40px auto;line-height:1.7;padding:0 20px}
+table{border-collapse:collapse;width:100%}th,td{padding:6px 12px;border:1px solid #ddd;text-align:left}th{background:#f5f5f5}
+img{max-width:100%;height:auto}</style>
+</head><body><div class="ldoc-text">${html}</div></body></html>`;
+    };
+
+    const _fname = (spec.name || spec.title || 'document')
+      .replace(/[^a-zA-Z0-9_\- äöüÄÖÜß]/g, '').trim() || 'document';
+
+    _addDownloadButton(exportBar, {
+      rawData,
+      formats: [
+        {
+          label: 'Download as DOCX',
+          filename: `${_fname}.docx`,
+          mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          build: _buildDocx,
+        },
+        {
+          label: 'Download as HTML',
+          filename: `${_fname}.html`,
+          mime: 'text/html',
+          build: _buildHtml,
+        },
+      ],
     });
   },
 };
@@ -2276,7 +3058,7 @@ async function _exportPptxServerSide(spec) {
       return;
     }
     const blob = await resp.blob();
-    const filename = (spec.title || 'presentation').replace(/[^a-zA-Z0-9_\- ]/g, '').trim() || 'presentation';
+    const filename = (spec.name || spec.title || 'presentation').replace(/[^a-zA-Z0-9_\- ]/g, '').trim() || 'presentation';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -2433,7 +3215,7 @@ async function _exportPptxFromLayout(layout, spec) {
   }
   // Otherwise, fall through to client-side PptxGenJS export
   const pptx = await _buildPptxGenObj(layout, spec);
-  const filename = (spec.title || 'presentation').replace(/[^a-zA-Z0-9_\- ]/g, '').trim() || 'presentation';
+  const filename = (spec.name || spec.title || 'presentation').replace(/[^a-zA-Z0-9_\- ]/g, '').trim() || 'presentation';
   await pptx.writeFile({ fileName: `${filename}.pptx` });
 }
 
@@ -2512,7 +3294,7 @@ async function _exportPptxRendered(layout, spec) {
     offscreen.remove();
   }
 
-  const filename = (spec.title || 'presentation').replace(/[^a-zA-Z0-9_\- ]/g, '').trim() || 'presentation';
+  const filename = (spec.name || spec.title || 'presentation').replace(/[^a-zA-Z0-9_\- ]/g, '').trim() || 'presentation';
   await pptx.writeFile({ fileName: `${filename}.pptx` });
 }
 
@@ -3032,7 +3814,7 @@ _attachmentExporters['text_doc'] = async (entry, attName) => {
   if (!resp.ok) throw new Error('DOCX export failed: ' + await resp.text());
   const blob = await resp.blob();
   const b64 = await _blobToBase64(blob);
-  const name = (attName || spec.title || 'document').replace(/\.[^.]+$/, '') + '.docx';
+  const name = (attName || spec.name || spec.title || 'document').replace(/\.[^.]+$/, '') + '.docx';
   return { name, content_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', data: b64, size: blob.size };
 };
 _attachmentExporters['word'] = _attachmentExporters['text_doc'];

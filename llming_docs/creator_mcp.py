@@ -6,6 +6,10 @@ from typing import Any, Dict, List
 
 from llming_models.tools.mcp import InProcessMCPServer
 from llming_docs.document_store import DocumentSessionStore
+from llming_docs.ops_dispatcher import (
+    apply_operations_to_data,
+    empty_data_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,21 +32,24 @@ class DocumentCreatorMCP(InProcessMCPServer):
                 "displayDescription": "Create a rich document",
                 "icon": "description",
                 "description": (
-                    "Create a new document that will be rendered in the chat. "
-                    "Supported types: plotly, latex, table, text_doc, presentation, html. "
-                    "The data format depends on the type:\n"
-                    "- plotly: {data: [...], layout: {...}}\n"
-                    "- latex: {formula: '...'}\n"
-                    "- table: {columns: [...], rows: [...]}  (for spreadsheets / data tables)\n"
-                    "- text_doc: {sections: [{id, type, content, ...}]}  (for text documents / DOCX). "
-                    "Use {type: 'embed', $ref: '<doc-id>'} sections to embed charts/tables by reference.\n"
-                    "- presentation: {slides: [{id, title, elements: [...]}]}  (for presentations; optional \"template\" field for branded styling)\n"
-                    "- html: {html: '', css: '', js: '', title: ''}\n"
-                    "- email_draft: {subject: '', to: [...], cc: [...], bcc: [...], body_html: '', attachments: [{ref, name}]}\n"
-                    "IMPORTANT: Instead of using this tool, you can also produce fenced "
-                    "code blocks with the type as language (e.g. ```plotly ... ```) for "
-                    "inline rendering. Use this tool when the user wants a persistent "
-                    "document they can manage in the document panel."
+                    "Create a new document. Use the same operation vocabulary you would "
+                    "use with `update_document` to populate it — there is no per-type "
+                    "creation payload. Supported types: text_doc, table, plotly, latex, "
+                    "presentation, html, email_draft.\n"
+                    "\n"
+                    "The server creates an empty document of the requested type and applies "
+                    "every operation in `operations` (atomically). Examples:\n"
+                    "\n"
+                    "Text document:\n"
+                    "  operations: ["
+                    "{op:'add', path:'sections/-', value:{id:'s1', type:'heading', level:1, content:'Title'}},"
+                    "{op:'add', path:'sections/-', value:{id:'s2', type:'paragraph', content:'…'}}]\n"
+                    "\n"
+                    "Spreadsheet (XLSX-backed; use openpyxl-native A1 paths):\n"
+                    "  operations: ["
+                    "{op:'set', path:'sheets/0/name', value:'Q1'},"
+                    "{op:'bulk_set', path:'sheets/0/range/A1', values:[['Product','Revenue'],['Widget',100]]},"
+                    "{op:'set', path:'sheets/0/cells/B1/font', value:{bold:true}}]\n"
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -56,12 +63,27 @@ class DocumentCreatorMCP(InProcessMCPServer):
                             "type": "string",
                             "description": "Human-readable document name",
                         },
-                        "data": {
-                            "type": "string",
-                            "description": "Document data as a JSON string (format depends on type)",
+                        "operations": {
+                            "type": "array",
+                            "description": (
+                                "Operations to apply to a freshly-created empty document "
+                                "of this type. Same vocabulary as update_document. May be "
+                                "empty to create a blank document."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "op": {"type": "string"},
+                                    "path": {"type": "string"},
+                                    "value": {},
+                                    "values": {},
+                                    "position": {"type": "integer"},
+                                },
+                                "required": ["op", "path"],
+                            },
                         },
                     },
-                    "required": ["type", "name", "data"],
+                    "required": ["type", "name"],
                 },
             },
             {
@@ -125,23 +147,31 @@ class DocumentCreatorMCP(InProcessMCPServer):
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
         if name == "create_document":
-            data = arguments["data"]
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except json.JSONDecodeError as e:
-                    return json.dumps({
-                        "error": "json_parse_failed",
-                        "message": f"Failed to parse document data as JSON: {e}",
-                        "hint": "Ensure the data field is valid JSON. Check for trailing commas, missing quotes, or unclosed brackets.",
-                    })
             doc_type = self._TYPE_ALIASES.get(arguments["type"], arguments["type"])
+            operations = arguments.get("operations") or []
+            doc_name = arguments["name"]
+
+            # Start from the per-type empty template so the LLM's ops have
+            # a known parent to land on (sections/-, sheets/0/cells/A1/value, …).
+            initial = empty_data_for(doc_type)
+
+            # Apply ops to the empty data. ``apply_operations_to_data``
+            # routes table → openpyxl, everything else → JSON path ops.
+            new_data, op_error = apply_operations_to_data(
+                doc_type, initial, operations,
+            )
+            if op_error is not None:
+                return json.dumps(op_error)
+
+            # Skip the JSON-shape validator for table — the workbook IS
+            # the validator (any invalid op already raised above).
+            skip_validation = (doc_type == "table")
             result = self._store.create(
                 type=doc_type,
-                name=arguments["name"],
-                data=data,
+                name=doc_name,
+                data=new_data,
+                skip_validation=skip_validation,
             )
-            # Validation errors returned as list
             if isinstance(result, list):
                 return json.dumps({
                     "error": "validation_failed",
@@ -157,6 +187,7 @@ class DocumentCreatorMCP(InProcessMCPServer):
                 "type": doc.type,
                 "name": doc.name,
                 "version": doc.version,
+                "operations_applied": len(operations),
             })
 
         elif name == "list_documents":
